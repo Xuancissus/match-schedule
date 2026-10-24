@@ -1,0 +1,4 @@
+# Publish only the tool itself; backups, design files and screenshots stay local
+*
+!.gitignore
+!index.html

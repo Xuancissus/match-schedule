@@ -1,0 +1,1507 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>個人化運動賽程規劃工具</title>
+<!-- Browser-tab icon: calendar drawn as inline SVG (ink body, vermilion header, one highlighted day) -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect x='6' y='10' width='52' height='48' rx='9' fill='%2326231F'/><path d='M6 19a9 9 0 0 1 9-9h34a9 9 0 0 1 9 9v6H6z' fill='%23C9431A'/><rect x='18' y='4' width='6' height='13' rx='3' fill='%23F3F1EC'/><rect x='40' y='4' width='6' height='13' rx='3' fill='%23F3F1EC'/><g fill='%23F3F1EC'><rect x='15' y='32' width='8' height='7' rx='2'/><rect x='28' y='32' width='8' height='7' rx='2'/><rect x='41' y='32' width='8' height='7' rx='2' fill='%23FF8A5C'/><rect x='15' y='44' width='8' height='7' rx='2'/><rect x='28' y='44' width='8' height='7' rx='2'/><rect x='41' y='44' width='8' height='7' rx='2'/></g></svg>">
+<!-- Space Grotesk (free, SIL OFL) for big numbers; offline it falls back to the system font -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* =====================================================================
+     Design tokens — "Magazine Matchday" design system (see design-system/DESIGN.md).
+     Change colors / sizes here; everything below reads these variables.
+     ===================================================================== */
+  :root {
+    color-scheme: light dark;          /* native scrollbars, date/time pickers follow the theme */
+    /* Fonts */
+    --font-ui: -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+    --font-num: "Space Grotesk", -apple-system, BlinkMacSystemFont, "PingFang TC", sans-serif;
+    /* Type scale (px) */
+    --fs-display: 32px; --fs-time: 34px; --fs-score: 24px; --fs-team: 18px; --fs-date: 18px;
+    --fs-body: 16px; --fs-label: 14px; --fs-caption: 13px; --fs-micro: 12px;
+    /* Spacing: multiples of 4 / 8 */
+    --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px;
+    /* Shape (M3 corner scale) */
+    --r-xs: 4px; --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-xl: 28px; --r-full: 999px;
+    --tap: 44px;                       /* minimum touch target (Apple 44pt) */
+    /* Colors — light */
+    --color-bg: #F1EFEA;               /* page background (warm paper) */
+    --color-surface: #FFFFFF;          /* cards, dialog */
+    --color-surface-2: #F7F5F1;        /* inner sections, neutral chips */
+    --color-text: #1C1B19;             /* main text */
+    --color-text-muted: #57534C;       /* secondary text */
+    --color-outline: #8A847A;          /* input / button borders (≥3:1) */
+    --color-divider: #E2DED5;          /* decorative lines only */
+    --color-primary: #C9431A;          /* orange vermilion: main action, sport label, live */
+    --color-on-primary: #FFFFFF;
+    --color-primary-container: #FCE4D8;
+    --color-on-primary-container: #6B230A;
+    --color-secondary: #34495E;        /* slate: selected day, "勝" badge */
+    --color-on-secondary: #FFFFFF;
+    --color-secondary-container: #DDE5EE;
+    --color-on-secondary-container: #1B2A3A;
+    --color-warn-container: #FFEBC7;   /* time TBD, postponed */
+    --color-on-warn-container: #5C3A00;
+    --color-scrim: rgba(20, 18, 15, .5);
+    --color-banner: #26231F;           /* header banner background (warm ink) */
+    --color-on-banner: #F3F1EC;        /* title on the banner */
+    --color-on-banner-accent: #FF8A5C; /* tagline on the banner */
+    --color-on-banner-muted: #C9C3B7;  /* kickoff window, update time on the banner */
+  }
+  /* Colors — dark (follows the system setting) */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --color-bg: #121211; --color-surface: #1D1C1A; --color-surface-2: #262522;
+      --color-text: #F3F1EC; --color-text-muted: #ADA89E; --color-outline: #77726A; --color-divider: #33312D;
+      --color-primary: #FF8A5C; --color-on-primary: #2A0B00;
+      --color-primary-container: #4A1F10; --color-on-primary-container: #FFD4C2;
+      --color-secondary: #C9D6E3; --color-on-secondary: #15202B;
+      --color-secondary-container: #2A3846; --color-on-secondary-container: #DDE5EE;
+      --color-warn-container: #3E2F12; --color-on-warn-container: #FFDB9A;
+      --color-scrim: rgba(0, 0, 0, .6);
+      --color-banner: #262522; --color-on-banner: #F3F1EC; --color-on-banner-accent: #FF8A5C; --color-on-banner-muted: #ADA89E;
+    }
+  }
+  /* Phones: larger body text (iOS default 17) and a smaller headline */
+  @media (max-width: 599px) {
+    :root { --fs-display: 28px; --fs-time: 30px; --fs-body: 17px; }
+  }
+
+  /* ===== Base ===== */
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--color-bg); color: var(--color-text);
+    font: var(--fs-body)/1.6 var(--font-ui); -webkit-text-size-adjust: 100%; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: var(--sp-2) var(--sp-4) 64px; }
+  h1 { font: 700 var(--fs-display)/1.05 var(--font-num); letter-spacing: -.03em; margin: 0; }
+  .sub { color: var(--color-text-muted); font-size: var(--fs-label); margin-top: var(--sp-1); }
+  .top { display: flex; justify-content: space-between; align-items: flex-end; gap: var(--sp-3); flex-wrap: wrap; }
+  /* Header banner: full-width band, content aligned with the page column */
+  .banner { background: var(--color-banner); color: var(--color-on-banner); border-bottom: 3px solid var(--color-primary); }   /* primary accent line */
+  .banner-in { max-width: 880px; margin: 0 auto; padding: var(--sp-8) var(--sp-4) var(--sp-6); }
+  .tagline { margin: var(--sp-2) 0 0; font-size: var(--fs-team); font-weight: 600; color: var(--color-on-banner-accent); }
+  .banner .sub, .banner .sync { color: var(--color-on-banner-muted); }
+  .banner .sub { margin-top: var(--sp-1); }
+  .banner .sync button { background: transparent; color: var(--color-on-banner); border-color: var(--color-on-banner-muted); }
+  .banner .sync button:hover { border-color: var(--color-on-banner); }
+  .sync { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-caption); color: var(--color-text-muted); }
+  .sync button { min-height: 36px; padding: 0 var(--sp-3); font-size: var(--fs-caption); }
+  :focus-visible { outline: 3px solid var(--color-primary); outline-offset: 2px; }
+
+  /* ===== Buttons & inputs ===== */
+  button, select { font: inherit; font-size: var(--fs-label); font-weight: 600; color: var(--color-text);
+    background: var(--color-surface); border: 1px solid var(--color-outline); border-radius: var(--r-full);
+    min-height: 36px; padding: 0 var(--sp-4); cursor: pointer; }
+  button:hover, select:hover { border-color: var(--color-text); }
+  button.primary { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-on-primary); }
+  button.primary:hover { filter: brightness(1.08); }
+  button:disabled { opacity: .6; cursor: wait; }
+  select { padding: 0 var(--sp-3); border-radius: var(--r-sm); }
+  .toolbar { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin: var(--sp-4) 0 var(--sp-3); }
+  .range { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); font-size: var(--fs-label); color: var(--color-text-muted); }
+  .range input[type=date], input[type=time] { font: inherit; font-size: var(--fs-label); color: var(--color-text);
+    background: var(--color-surface); border: 1px solid var(--color-outline); border-radius: var(--r-sm);
+    min-height: 36px; padding: 0 var(--sp-2); }
+  /* Date field: a calendar icon on the right shows it can be tapped (iOS shows no picker hint) */
+  .date-field { position: relative; display: inline-flex; align-items: center; }
+  .date-field input[type=date] { padding-right: 36px; cursor: pointer; -webkit-appearance: none; appearance: none; }
+  .date-field input[type=date]:hover { border-color: var(--color-text); }
+  /* The browser writes the date in its own locale format (iPhone: 2026年10月19日); hide it and show ours */
+  .date-field input[type=date] { color: transparent; min-width: 150px; }
+  .date-field input::-webkit-datetime-edit { color: transparent; }
+  .date-field .date-text { position: absolute; left: 0; padding-left: var(--sp-3); font-size: var(--fs-label);
+    color: var(--color-text); font-variant-numeric: tabular-nums; pointer-events: none; }
+  .date-field .cal { position: absolute; right: 10px; margin: 0; color: var(--color-text-muted); pointer-events: none; }
+  /* Chrome/Edge: hide the built-in icon but keep it clickable over ours */
+  .date-field input::-webkit-calendar-picker-indicator { position: absolute; right: 0; top: 0; width: 36px; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer; }
+  .date-field input::-webkit-date-and-time-value { text-align: left; }
+  .spacer { flex: 1; }
+
+  /* ===== Notices & summary ===== */
+  .notice { background: var(--color-warn-container); color: var(--color-on-warn-container); border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-4); font-size: var(--fs-label); margin: var(--sp-2) 0; }
+  .summary { margin: var(--sp-4) 0 var(--sp-2); color: var(--color-text-muted); font-size: var(--fs-label); }
+
+  /* ===== Day tabs: date is smaller than kickoff time on purpose ===== */
+  .tabs { display: flex; gap: var(--sp-2); overflow-x: auto; padding: 2px 2px var(--sp-2); scrollbar-width: thin; }
+  .tab { flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-width: 84px; min-height: 60px; padding: var(--sp-1) var(--sp-3); border-radius: var(--r-lg);
+    border: 1px solid var(--color-divider); background: var(--color-surface); line-height: 1.25; font-weight: 400; }
+  .tab .d { font: 600 var(--fs-date)/1.2 var(--font-num); letter-spacing: -.01em; }
+  .tab .n { font-size: var(--fs-micro); color: var(--color-text-muted); }
+  .tab.empty-day .d { color: var(--color-text-muted); }
+  .tab.today { border: 2px solid var(--color-primary); }
+  .tab.active { background: var(--color-secondary); border-color: var(--color-secondary); color: var(--color-on-secondary); }
+  .tab.active .d, .tab.active .n { color: var(--color-on-secondary); }
+  .day-list { margin-top: var(--sp-3); }
+
+  /* ===== Match card ===== */
+  .item { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: var(--sp-4); background: var(--color-surface);
+    border-radius: var(--r-lg); padding: var(--sp-4) 18px; margin-bottom: var(--sp-3); }
+  .when { font: 700 var(--fs-time)/1 var(--font-num); letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+  .when small { display: block; font: 500 var(--fs-caption)/1.4 var(--font-ui); color: var(--color-text-muted); letter-spacing: 0; margin-top: var(--sp-1); }
+  .when.tbd { font-size: 26px; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+  .comp { font-size: var(--fs-label); font-weight: 600; color: var(--color-text-muted); }
+  .comp em { font-style: normal; color: var(--color-primary); }
+  .statuses { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-1); flex: none; max-width: 50%; }
+  .status { font-size: var(--fs-caption); font-weight: 600; padding: 2px 10px; border-radius: var(--r-full);
+    background: var(--color-surface-2); color: var(--color-text-muted); white-space: nowrap; }
+  .status.warn { background: var(--color-warn-container); color: var(--color-on-warn-container); }
+  .status.live { background: var(--color-primary-container); color: var(--color-on-primary-container); }
+  .status.live::before { content: "● "; color: var(--color-primary); }
+  /* Two sides stacked, scores right-aligned in their own column */
+  .sides { display: grid; grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; column-gap: var(--sp-3); align-items: center; }
+  .side { display: flex; align-items: center; gap: 10px; font-size: var(--fs-team); font-weight: 700; min-width: 0; }
+  .side .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .side.lose { color: var(--color-text-muted); font-weight: 500; }
+  .side img { width: 24px; height: 24px; object-fit: contain; flex: none; }
+  .win { font: 700 var(--fs-micro)/1 var(--font-ui); padding: 4px 7px; border-radius: var(--r-full); flex: none;
+    background: var(--color-secondary); color: var(--color-on-secondary); }
+  .win.draw { background: var(--color-secondary-container); color: var(--color-on-secondary-container); }
+  .pts { display: flex; gap: var(--sp-3); justify-content: flex-end; font: 700 var(--fs-score)/1 var(--font-num); font-variant-numeric: tabular-nums; }
+  .pts span { min-width: 18px; text-align: right; }
+  .pts sup { font-size: var(--fs-micro); font-weight: 500; }
+  .side.lose + .pts { color: var(--color-text-muted); font-weight: 500; }
+  .f1-name { font-size: var(--fs-team); font-weight: 700; }
+  .foot { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+    margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--color-divider); font-size: var(--fs-label); color: var(--color-text-muted); }
+  .foot a.stats { color: var(--color-text); font-weight: 600; text-decoration: underline; text-underline-offset: 4px;
+    min-height: 32px; display: inline-flex; align-items: center; margin-left: auto; }
+  .foot a.stats:hover { color: var(--color-primary); }
+  /* inline-block keeps the arrow out of the underline */
+  .foot a.stats .arr { display: inline-block; margin-left: var(--sp-1); text-decoration: none; }
+  .empty { color: var(--color-text-muted); padding: var(--sp-8) 0; text-align: center; }
+  .empty button { margin-top: var(--sp-3); }
+  @media (max-width: 599px) {
+    .item { grid-template-columns: 1fr; gap: 10px; padding: 14px var(--sp-4); }
+    .when { display: flex; align-items: baseline; gap: var(--sp-2); }
+    .when small { margin: 0; }
+  }
+
+  /* ===== Standings sidebar ===== */
+  .standings { background: var(--color-surface); border-radius: var(--r-lg); padding: var(--sp-4); margin-top: var(--sp-6); }
+  .st-title { font-size: var(--fs-team); margin: 0 0 var(--sp-3); }
+  .st-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+  .st-tab { background: none; border-color: transparent; color: var(--color-text-muted); padding: 0 var(--sp-3); }
+  .st-tab:hover { color: var(--color-text); border-color: var(--color-divider); }
+  .st-tab.active { background: var(--color-secondary); border-color: var(--color-secondary); color: var(--color-on-secondary); }
+  .st-tab .emoji { margin-right: 4px; }
+  .st-sub { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin: var(--sp-3) 0 var(--sp-2); }
+  .st-sub select { width: 100%; }
+  .st-sub button { font-weight: 500; }
+  .st-sub button.on { background: var(--color-secondary-container); border-color: var(--color-secondary); color: var(--color-on-secondary-container); }
+  .st-table { width: 100%; border-collapse: collapse; font-size: var(--fs-label); }
+  .st-table th { font-size: var(--fs-micro); font-weight: 600; color: var(--color-text-muted); text-align: right; padding: var(--sp-1) 6px; border-bottom: 1px solid var(--color-divider); white-space: nowrap; }
+  .st-table td { padding: 6px; text-align: right; font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--color-divider); white-space: nowrap; }
+  .st-table th.nm, .st-table td.nm { text-align: left; width: 100%; }
+  .st-table td.nm { max-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+  .st-table td.nm img { width: 18px; height: 18px; object-fit: contain; vertical-align: -4px; margin-right: 6px; }
+  .st-table td.nm .tdot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin: 0 9px 0 3px; vertical-align: -1px;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .25); }   /* team color dot; the ring keeps white (Williams) visible */
+  .st-table td.rk { font: 600 var(--fs-label) var(--font-num); color: var(--color-text-muted); }
+  .st-table td.st-pts { font-weight: 700; }
+  .st-table tr.mine td { background: var(--color-secondary-container); color: var(--color-on-secondary-container); }
+  .st-table tr.mine td.rk { color: inherit; }
+  .st-table tr.gap td { text-align: center; color: var(--color-text-muted); border-bottom: none; padding: 2px; }
+  .st-note { margin-top: var(--sp-2); }
+  .st-msg { color: var(--color-text-muted); font-size: var(--fs-label); padding: var(--sp-4) 0; }
+  /* Wide screens: schedule on the left, standings on the right (sticky, scrolls on its own) */
+  @media (min-width: 1200px) {
+    .wrap { max-width: 1240px; display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: var(--sp-6); align-items: start; }
+    .banner-in { max-width: 1240px; }
+    .standings { margin-top: var(--sp-4); position: sticky; top: var(--sp-4); max-height: calc(100vh - 32px); overflow-y: auto; }
+  }
+
+  /* ===== Filter dialog ===== */
+  dialog.filters { width: min(760px, calc(100vw - 32px)); max-height: 85vh; padding: 0; overflow: hidden;
+    background: var(--color-surface); color: var(--color-text); border: none; border-radius: var(--r-xl); }
+  dialog.filters::backdrop { background: var(--color-scrim); }
+  .dlg-head { display: flex; align-items: center; justify-content: space-between; padding: var(--sp-4) var(--sp-6);
+    border-bottom: 1px solid var(--color-divider); }
+  .dlg-head h2 { font-size: 20px; margin: 0; }
+  .dlg-body { padding: var(--sp-1) var(--sp-6) var(--sp-6); overflow-y: auto; max-height: calc(85vh - 77px); }
+  .dlg-actions { display: flex; gap: var(--sp-2); align-items: center; }
+  /* "完成" is greyed out and unclickable until something changes */
+  #closeFilters:disabled { background: var(--color-surface-2); border-color: var(--color-divider); color: var(--color-text-muted); opacity: 1; cursor: not-allowed; }
+  .settings-btns { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+  .fsection { background: var(--color-surface-2); border-radius: var(--r-lg); padding: var(--sp-3) var(--sp-4) var(--sp-4); margin-top: var(--sp-4); }
+  .fsection h3 { font-size: var(--fs-label); margin: 0; color: var(--color-text-muted); }
+  .top-sections { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+  .top-sections .fsection { margin-top: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-2); }
+  .top-sections .fgroup { margin-top: 0; }
+  .top-sections #settingsMsg:empty { display: none; }
+  .win-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); font-size: var(--fs-label); }
+  @media (max-width: 599px) { .top-sections { grid-template-columns: 1fr; gap: 0; } }
+  .sport-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-5); }
+  .sport-tab { background: none; border-color: transparent; color: var(--color-text-muted); }
+  .sport-tab:hover { color: var(--color-text); border-color: var(--color-divider); }
+  .sport-tab .cnt { font-size: var(--fs-micro); margin-left: 3px; }
+  .sport-tab.active { background: var(--color-secondary); border-color: var(--color-secondary); color: var(--color-on-secondary); }
+  .sport-panel { display: none; margin-top: var(--sp-3); }
+  .sport-panel.active { display: block; }
+  .fgroup { margin-top: var(--sp-3); }
+  .fgroup:empty { display: none; }
+  .fgroup .ftitle { font-size: var(--fs-label); font-weight: 600; margin-bottom: var(--sp-2); }
+  .chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; border: 1px solid var(--color-outline);
+    background: var(--color-surface); border-radius: var(--r-full); padding: 0 var(--sp-3); font-size: var(--fs-label);
+    cursor: pointer; user-select: none; }
+  .chip input { margin: 0; accent-color: var(--color-secondary); }
+  .chip.on { background: var(--color-secondary-container); border-color: var(--color-secondary); color: var(--color-on-secondary-container); }
+  .chip img { width: 18px; height: 18px; object-fit: contain; }
+  .chip .rank { color: var(--color-text-muted); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
+  .chip .hint { color: inherit; opacity: .75; }
+  .chip .x { border: none; background: none; min-height: 32px; min-width: 32px; padding: 0; margin-right: -8px;
+    color: inherit; font-size: var(--fs-label); line-height: 1; border-radius: var(--r-full); }
+  .chip .x:hover { color: var(--color-primary); }
+  .picker { background: var(--color-surface); border-radius: var(--r-md); padding: var(--sp-3); margin-top: var(--sp-2); }
+  .picker-box summary { cursor: pointer; user-select: none; min-height: 32px; display: list-item; }
+  .picker-box summary:hover { color: var(--color-primary); }
+  .picker-box summary::marker { color: var(--color-primary); }
+  .pick-bar { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-3); }
+  .pick-bar button:disabled { cursor: default; }
+  .hint { color: var(--color-text-muted); font-size: var(--fs-caption); }
+  .ico { width: 18px; height: 18px; vertical-align: -3px; margin-right: 6px; flex: none; }
+  .dlg-head h2 { display: flex; align-items: center; }
+  .dlg-head h2 .ico { width: 20px; height: 20px; }
+  .comp .emoji, .sport-tab .emoji { margin-right: 4px; font-size: 1.05em; }
+  /* Touch screens (phone / tablet): every tappable thing at least 44px (Apple) — main buttons 48px (M3) */
+  @media (pointer: coarse) {
+    .chip, .foot a.stats, .picker-box summary { min-height: 44px; }
+    .chip .x { min-width: 44px; min-height: 44px; margin-right: -12px; }
+    button, select, .range input[type=date], .win-row select, .toolbar button, .settings-btns button, .sync button { min-height: var(--tap); }
+  }
+  /* Phones: narrower pill buttons (16px -> 12px side padding) */
+  @media (max-width: 599px) {
+    button { padding: 0 var(--sp-3); }
+    .sync button { padding: 0 10px; }
+    #openFilters .fb-label { display: none; }   /* icon + count only */
+    #openFilters { padding: 0 var(--sp-4); }
+    /* Date range: one full-width row, the two fields share the space, dates left-aligned */
+    .range { display: flex; flex-wrap: nowrap; width: 100%; }
+    .range .date-field { flex: 1; min-width: 0; }
+    .range .date-field input[type=date] { width: 100%; min-width: 0; }
+    .range .date-field .date-text { left: 0; right: 36px; text-align: left; }
+  }
+</style>
+</head>
+<body>
+<header class="banner">
+  <div class="banner-in top">
+    <div>
+      <h1>個人化運動賽程規劃工具</h1>
+      <p class="tagline">打造你的專屬賽程</p>
+      <div class="sub" id="windowText"></div>
+    </div>
+    <div class="sync">
+      <span id="updated">尚未載入</span>
+      <button id="refresh">↻ 更新</button>
+    </div>
+  </div>
+</header>
+<div class="wrap">
+<main class="main">
+
+  <div class="toolbar">
+    <span class="range">
+      <label class="date-field"><input type="date" id="rangeStart" aria-label="開始日期" required><span class="date-text" id="rangeStartText"></span><svg class="ico cal" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></label>
+      <span>到</span>
+      <label class="date-field"><input type="date" id="rangeEnd" aria-label="結束日期" required><span class="date-text" id="rangeEndText"></span><svg class="ico cal" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3.5 10h17M8 3v4M16 3v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></label>
+    </span>
+    <button id="thisWeek">回到本週</button>
+    <span class="spacer"></span>
+    <button class="primary" id="openFilters">篩選器</button>
+  </div>
+
+  <dialog class="filters" id="filtersBox">
+    <div class="dlg-head">
+      <h2><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6.2 7.6V19l-3.6-1.8v-4.6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>篩選器</h2>
+      <span class="dlg-actions">
+        <button id="cancelFilters">取消</button>
+        <button id="closeFilters" class="primary" disabled>完成</button>
+      </span>
+    </div>
+    <div class="dlg-body">
+
+    <div class="top-sections">
+      <section class="fsection">
+        <h3>開賽時間（台灣時間）</h3>
+        <div class="win-row">
+          <span>從</span>
+          <select id="winStart" data-win="winStart" aria-label="開賽時間從"></select>
+          <span>到</span>
+          <select id="winEnd" data-win="winEnd" aria-label="開賽時間到"></select>
+        </div>
+      </section>
+
+      <section class="fsection" title="設定只存在這個瀏覽器裡。換瀏覽器或電腦時，先匯出，再到新的地方匯入。">
+        <h3>設定</h3>
+        <div class="fgroup">
+          <div class="settings-btns">
+            <button id="exportSettings">匯出設定</button>
+            <button id="importSettings">匯入設定</button>
+            <button id="resetSettings">清空</button>
+            <input type="file" id="importFile" accept=".json,application/json" hidden>
+          </div>
+          <div class="hint" id="settingsMsg"></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Sport tabs and panels are built by buildSportPanels() from the SPORT_TABS / FOLLOW config. -->
+    <div class="sport-tabs" id="sportTabs" role="tablist"></div>
+    <div id="sportPanels"></div>
+    </div>
+  </dialog>
+
+  <div id="notices"></div>
+  <div class="summary" id="summary"></div>
+  <div class="tabs" id="tabs" role="tablist"></div>
+  <div class="day-list" id="list"></div>
+</main>
+
+<!-- Standings: right column on wide screens, below the schedule on narrow ones. Built by renderStandings(). -->
+<aside class="standings" aria-label="排名">
+  <h2 class="st-title">排名</h2>
+  <div class="st-tabs" id="stTabs" role="tablist"></div>
+  <div class="st-sub" id="stSub"></div>
+  <div id="stTable"></div>
+  <div class="hint st-note" id="stNote"></div>
+</aside>
+</div>
+
+<script>
+// =====================================================================
+// CONFIG
+// =====================================================================
+
+// Default kickoff window in Taiwan time: 06:00 through 01:30 the next morning (inclusive).
+// Each person can change it in the filter pop-up ("顯示" box); it is saved with the other filters.
+const WINDOW_START_MIN = 6 * 60;      // 06:00
+const WINDOW_END_MIN = 1 * 60 + 30;   // 01:30
+
+// --- Soccer ---------------------------------------------------------
+// Leagues offered in the team picker (ESPN slug -> display name).
+// To offer another league, add its ESPN slug here (e.g. 'bel.1').
+const PICKER_LEAGUES = {
+  'eng.1': '英超', 'esp.1': '西甲', 'ger.1': '德甲', 'ita.1': '義甲', 'fra.1': '法甲',
+  'ned.1': '荷甲', 'por.1': '葡超', 'sco.1': '蘇超', 'usa.1': '美職 MLS', 'ksa.1': '沙烏地職業聯賽',
+};
+
+// Chinese names for competitions. Anything not listed falls back to ESPN's English name.
+const COMP_NAMES = {
+  ...PICKER_LEAGUES,
+  'uefa.champions': '歐冠', 'uefa.europa': '歐霸', 'uefa.europa.conf': '歐協聯', 'uefa.super_cup': '歐洲超級盃',
+  'eng.fa': '英格蘭足總盃', 'eng.league_cup': '英格蘭聯賽盃', 'eng.charity': '英格蘭社區盾',
+  'esp.copa_del_rey': '西班牙國王盃', 'esp.super_cup': '西班牙超級盃',
+  'ger.dfb_pokal': '德國盃', 'ger.super_cup': '德國超級盃',
+  'ita.coppa_italia': '義大利盃', 'ita.super_cup': '義大利超級盃',
+  'fra.coupe_de_france': '法國盃', 'fra.super_cup': '法國超級盃',
+  'ned.cup': '荷蘭盃', 'por.taca.portugal': '葡萄牙盃', 'sco.tennents': '蘇格蘭足總盃', 'sco.cis': '蘇格蘭聯賽盃',
+  'club.friendly': '俱樂部友誼賽', 'fifa.cwc': '世界俱樂部盃',
+};
+
+// Competition types for the soccer filter.
+const COMP_TYPES = { league: '聯賽', cup: '杯賽', friendly: '友誼賽' };
+
+// ESPN cup stage names -> display name (unknown stages are shown in English)
+const STAGES = {
+  'League Phase': '聯賽階段', 'Knockout Round Playoffs': '淘汰賽附加賽', 'Round of 16': '16 強',
+  'Quarterfinals': '8 強', 'Semifinals': '準決賽', 'Final': '決賽',
+  'First Round': '第一輪', 'Second Round': '第二輪', 'Third Round': '第三輪', 'Fourth Round': '第四輪',
+  'Fifth Round': '第五輪', 'Round of 32': '32 強',
+};
+
+// Earlier versions stored Chinese names for these teams; they are switched to English on load.
+const LEGACY_NAMES = {
+  '132': 'Bayern Munich', '382': 'Manchester City', '83': 'Barcelona', '86': 'Real Madrid', '359': 'Arsenal',
+};
+
+// --- NBA ------------------------------------------------------------
+const NBA_CONFS = { east: '東區', west: '西區' };
+const NBA_TYPES = { preseason: '季前賽', regular: '例行賽', playoffs: '季後賽' };
+// ESPN season type numbers -> our filter key (5 = play-in tournament, counted as playoffs)
+const NBA_SEASON_TYPES = { 1: 'preseason', 2: 'regular', 3: 'playoffs', 5: 'playoffs' };
+
+// --- Tennis ---------------------------------------------------------
+const TENNIS_TOURS = { atp: 'ATP 男子', wta: 'WTA 女子' };
+const TENNIS_ROUNDS = {
+  'Qualifying 1st Round': '資格賽第一輪', 'Qualifying 2nd Round': '資格賽第二輪', 'Qualifying 3rd Round': '資格賽第三輪',
+  'Qualifying Final': '資格賽決賽', 'Round 1': '第一輪', 'Round 2': '第二輪', 'Round 3': '第三輪', 'Round 4': '第四輪',
+  'Round of 128': '128 強', 'Round of 64': '64 強', 'Round of 32': '32 強', 'Round of 16': '16 強',
+  'Quarterfinal': '8 強', 'Semifinal': '準決賽', 'Final': '決賽',
+};
+const TENNIS_STATUS = { STATUS_RETIRED: '對手退賽', STATUS_WALKOVER: '不戰而勝', STATUS_CANCELED: '取消' };
+
+// --- F1 -------------------------------------------------------------
+// F1 session keys from the Jolpica API -> [display name, filter category]
+const F1_SESSIONS = {
+  FirstPractice:    ['第一次練習賽 FP1', 'practice'],
+  SecondPractice:   ['第二次練習賽 FP2', 'practice'],
+  ThirdPractice:    ['第三次練習賽 FP3', 'practice'],
+  SprintQualifying: ['衝刺排位賽', 'qualifying'],
+  SprintShootout:   ['衝刺排位賽', 'qualifying'],
+  Sprint:           ['衝刺賽 Sprint', 'sprint'],
+  Qualifying:       ['排位賽', 'qualifying'],
+  Race:             ['正賽', 'race'],
+};
+const F1_CATEGORIES = { practice: '練習賽', qualifying: '排位賽', sprint: '衝刺賽', race: '正賽' };
+
+// --- Sports in the filter pop-up -----------------------------------
+// Order of the sport tabs.
+const SPORT_TABS = { soccer: '足球', nba: 'NBA', tennis: '網球', f1: 'F1' };
+
+// Sports where the user follows teams/players picked from a list.
+//   key:      where the followed list is kept in state / settings
+//   groups:   the first-level choice in the picker (league, conference, tour)
+const FOLLOW = {
+  soccer: { key: 'tracked',       groups: PICKER_LEAGUES, what: '球隊', groupWord: '聯賽' },
+  nba:    { key: 'nbaTeams',      groups: NBA_CONFS,      what: '球隊', groupWord: '分區' },
+  tennis: { key: 'tennisPlayers', groups: TENNIS_TOURS,   what: '選手', groupWord: '巡迴賽' },
+};
+const FOLLOW_KEYS = Object.values(FOLLOW).map(f => f.key);
+
+// Standings sidebar: soccer competitions that have a table (domestic cups are knockouts — no table).
+const STANDINGS_SOCCER = { ...PICKER_LEAGUES, 'uefa.champions': '歐冠（聯賽階段）', 'uefa.europa': '歐霸（聯賽階段）', 'uefa.europa.conf': '歐協聯（聯賽階段）' };
+const STANDINGS_TENNIS_TOP = 20;   // tennis shows the top 20 plus followed players
+const STANDINGS_SUB = {            // second-level switch per sport (soccer uses a dropdown instead)
+  nba: { east: '東區', west: '西區' },
+  tennis: { atp: 'ATP 男子', wta: 'WTA 女子' },
+  f1: { drivers: '車手', constructors: '車隊' },
+};
+
+// Emoji shown before the sport name on each match card.
+const SPORT_EMOJI = { '足球': '⚽', 'NBA': '🏀', '網球': '🎾', 'F1': '🏎️' };
+// Outline funnel icon for the filter button and dialog title (uses the current text color).
+const FILTER_ICON = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6.2 7.6V19l-3.6-1.8v-4.6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
+
+// =====================================================================
+// Helpers
+// =====================================================================
+const TW_OFFSET_MS = 8 * 3600 * 1000;
+const DAY_MS = 24 * 3600 * 1000;
+const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+const STORE_KEY = 'matchSchedule.v2';
+const ESPN = 'https://site.api.espn.com/apis/site/v2/sports';
+const ESPN_STANDINGS = 'https://site.api.espn.com/apis/v2/sports';
+
+// Shift a UTC timestamp so getUTC* methods return Taiwan wall-clock values.
+const tw = (ms) => new Date(ms + TW_OFFSET_MS);
+const pad = (n) => String(n).padStart(2, '0');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// Longest custom range allowed (one tab per day, so keep it manageable).
+const MAX_RANGE_DAYS = 62;
+
+// UTC ms of 00:00 Taiwan time on the day containing `ms`.
+function dayStartOf(ms) {
+  const d = tw(ms);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - TW_OFFSET_MS;
+}
+
+// UTC ms of Monday 00:00 Taiwan time for the week containing `ms`.
+function weekStartOf(ms) {
+  const dayIdx = (tw(ms).getUTCDay() + 6) % 7; // Monday = 0
+  return dayStartOf(ms) - dayIdx * DAY_MS;
+}
+
+// <input type="date"> uses "YYYY-MM-DD"; convert to/from Taiwan-midnight timestamps.
+const toInputDate = (ms) => { const d = tw(ms); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`; };
+function fromInputDate(s) {
+  const [y, m, d] = s.split('-').map(Number);
+  return Date.UTC(y, m - 1, d) - TW_OFFSET_MS;
+}
+// ESPN "dates" query format (UTC calendar date): YYYYMMDD
+const ymd = (ms) => { const d = new Date(ms); return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}`; };
+
+function inWindow(ms) {
+  const d = tw(ms);
+  const m = d.getUTCHours() * 60 + d.getUTCMinutes();
+  const { winStart: a, winEnd: b } = state.filters;
+  // A window like 06:00–01:30 wraps past midnight; 09:00–23:00 does not.
+  return a <= b ? m >= a && m <= b : m >= a || m <= b;
+}
+// Minutes since midnight <-> "HH:MM" (used by the time inputs and the header text)
+const minToHM = (m) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
+// The kickoff window is chosen in 30-minute steps; older saved values are snapped to the nearest step.
+const WIN_STEP = 30;
+const snapWin = (m) => (Math.round((Number(m) || 0) / WIN_STEP) * WIN_STEP) % (24 * 60);
+const WIN_OPTIONS = Array.from({ length: 24 * 60 / WIN_STEP }, (_, i) => i * WIN_STEP);
+
+function fmtDate(ms) {
+  const d = tw(ms);
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}（${WEEKDAYS[d.getUTCDay()]}）`;
+}
+const fmtWeekday = (ms) => `週${WEEKDAYS[tw(ms).getUTCDay()]}`;
+const fmtTime = (ms) => { const d = tw(ms); return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`; };
+
+// League slugs look like "eng.1"; friendlies contain "friendly" (or are pre-season trophies);
+// everything else (domestic cups, super cups, UEFA competitions) counts as a cup.
+function compType(slug) {
+  if (/^[a-z]{3}\.\d$/.test(slug)) return 'league';
+  if (/friendly|joan_gamper/.test(slug)) return 'friendly';
+  return 'cup';
+}
+
+// localStorage may be unavailable (private mode etc.) — never let it break the page.
+function loadStore() {
+  try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; }
+}
+function saveStore(patch) {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...loadStore(), ...patch })); } catch {}
+}
+
+// Merge new events into a list by id (an event shared by two followed teams is kept once).
+function mergeById(base, events) {
+  const byId = new Map(base.map(e => [e.id, e]));
+  for (const e of events) byId.set(e.id, e);
+  return [...byId.values()];
+}
+
+// =====================================================================
+// State
+// =====================================================================
+const DEFAULT_FILTERS = {
+  types: ['league', 'cup'],
+  nbaTypes: ['regular', 'playoffs'],
+  f1On: true,
+  f1Cats: Object.keys(F1_CATEGORIES),
+  winStart: WINDOW_START_MIN,
+  winEnd: WINDOW_END_MIN,
+};
+
+// Followed items are {id, name, group, logo}. Older soccer entries used "league" instead of "group".
+const cleanFollowList = (list) => (Array.isArray(list) ? list : [])
+  .filter(t => t && typeof t.id === 'string' && typeof t.name === 'string')
+  .map(t => ({ id: t.id, name: LEGACY_NAMES[t.id] || t.name, group: String(t.group || t.league || ''), logo: String(t.logo || '') }));
+
+const stored = loadStore();
+const state = {
+  // Date range shown as tabs (Taiwan-midnight timestamps, end day inclusive). Defaults to this week.
+  rangeStart: weekStartOf(Date.now()),
+  rangeEnd: weekStartOf(Date.now()) + 6 * DAY_MS,
+  selectedDay: dayStartOf(Date.now()),
+  f1Years: new Set(),                         // F1 seasons already fetched this session
+  tennisCovered: null,                        // {from, to} range the tennis data was fetched for
+  sportTab: 'soccer',                         // sport tab shown in the filter pop-up
+  // Followed teams / players
+  tracked: cleanFollowList(stored.tracked),             // soccer teams
+  nbaTeams: cleanFollowList(stored.nbaTeams),
+  tennisPlayers: cleanFollowList(stored.tennisPlayers),
+  // Normalized events per sport
+  soccer: stored.soccer || [],
+  nba: stored.nba || [],
+  tennis: stored.tennis || [],
+  f1: stored.f1 || [],
+  fetchedAt: stored.fetchedAt || null,
+  errors: [],
+  // Picker: selected first-level group per sport, and loaded lists: pickLists[sport][group] = [...]
+  pickGroup: { soccer: stored.pickerLeague || 'eng.1', nba: 'east', tennis: 'atp', ...(stored.pickGroup || {}) },
+  pickLists: { soccer: {}, nba: {}, tennis: {} },
+  filters: { ...DEFAULT_FILTERS, ...(stored.filters || {}) },
+};
+// "showLate" was removed (the kickoff window replaces it); snap old free-form times to 30-minute steps.
+delete state.filters.showLate;
+state.filters.winStart = snapWin(state.filters.winStart);
+state.filters.winEnd = snapWin(state.filters.winEnd);
+const follows = (key, id, src = state) => src[key].some(t => t.id === id);
+const followCount = (src = state) => FOLLOW_KEYS.reduce((n, k) => n + src[k].length, 0);
+
+// =====================================================================
+// Data fetching
+// =====================================================================
+async function getJSON(url) {
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+// Full schedule of one followed team (soccer or NBA).
+//   Soccer: ESPN's "all" path returns every competition; without "fixture=true" it gives
+//           played matches, with it, upcoming ones.
+//   NBA:    one request per season type (preseason, regular season, playoffs, play-in).
+async function fetchTeamSchedule(sport, team) {
+  const urls = sport === 'soccer'
+    ? [`${ESPN}/soccer/all/teams/${team.id}/schedule`, `${ESPN}/soccer/all/teams/${team.id}/schedule?fixture=true`]
+    : [1, 2, 3, 5].map(t => `${ESPN}/basketball/nba/teams/${team.id}/schedule?seasontype=${t}`);
+  const results = await Promise.allSettled(urls.map(getJSON));
+  if (results.every(r => r.status !== 'fulfilled')) throw new Error(team.name);
+  return results.flatMap(r => r.status === 'fulfilled' ? (r.value.events || []) : []).map(e => normalizeTeamGame(e, sport));
+}
+
+// Soccer and NBA games share ESPN's event format.
+function normalizeTeamGame(e, sport) {
+  const c = e.competitions?.[0] || {};
+  const side = (homeAway) => {
+    const t = (c.competitors || []).find(x => x.homeAway === homeAway) || {};
+    return {
+      id: t.team?.id || '',
+      name: t.team?.displayName || '?',
+      logo: t.team?.logos?.[0]?.href || t.team?.logo || '',
+      score: t.score?.displayValue ?? (typeof t.score === 'string' ? t.score : null),
+      winner: t.winner === true,       // also set for wins on penalties
+    };
+  };
+  const st = c.status?.type || {};
+  const base = {
+    start: Date.parse(e.date),
+    timeValid: e.timeValid !== false,
+    home: side('home'),
+    away: side('away'),
+    state: st.state || 'pre',          // pre / in / post
+    statusName: st.name || '',
+    statusText: st.shortDetail || st.description || '',
+    venue: c.venue?.fullName || '',
+  };
+  if (sport === 'nba') {
+    return { ...base, id: 'n' + e.id, kind: 'nba', type: NBA_SEASON_TYPES[e.seasonType?.type] || 'regular',
+      clock: st.shortDetail || '' };
+  }
+  const slug = e.league?.slug || '';
+  return { ...base, id: 's' + e.id, kind: 'soccer', comp: slug,
+    compName: COMP_NAMES[slug] || e.league?.name || slug, type: compType(slug),
+    stage: e.seasonType?.name || '', clock: c.status?.displayClock || '' };
+}
+
+// Tennis: one scoreboard request per tour for the whole date range; it lists every tournament
+// in that period with all of its matches. Only singles matches of followed players are kept.
+async function fetchTennis(players, from, to) {
+  const tours = [...new Set(players.map(p => p.group))].filter(t => TENNIS_TOURS[t]);
+  const ids = new Set(players.map(p => p.id));
+  const list = [];
+  const failed = [];
+  await Promise.all(tours.map(async (tour) => {
+    try {
+      // One extra day on each side: ESPN groups matches by US date.
+      const d = await getJSON(`${ESPN}/tennis/${tour}/scoreboard?dates=${ymd(from - DAY_MS)}-${ymd(to + DAY_MS)}`);
+      for (const ev of d.events || []) {
+        for (const g of ev.groupings || []) {
+          if (!/Singles/.test(g.grouping?.displayName || '')) continue;
+          for (const c of g.competitions || []) {
+            if ((c.competitors || []).some(x => ids.has(x.id))) list.push(normalizeTennis(ev, c));
+          }
+        }
+      }
+    } catch { failed.push(`網球 ${TENNIS_TOURS[tour]}`); }
+  }));
+  return { list, failed, allFailed: tours.length > 0 && failed.length === tours.length };
+}
+
+function normalizeTennis(ev, c) {
+  const players = [...(c.competitors || [])].sort((a, b) => (a.order || 0) - (b.order || 0));
+  const sets = (p) => (p.linescores || []).map(s => s.value);
+  const [a, b] = [players[0] || {}, players[1] || {}];
+  const sa = sets(a), sb = sets(b);
+  // Sets won (for the big score) and the set-by-set line, e.g. "6-4 3-6 7-6(5)".
+  const won = (x, y) => x.filter((v, i) => v > (y[i] ?? -1)).length;
+  const setLine = sa.map((v, i) => {
+    const tb = [a.linescores?.[i]?.tiebreak, b.linescores?.[i]?.tiebreak].filter(t => t != null);
+    return `${v}-${sb[i] ?? ''}${tb.length ? `(${Math.min(...tb)})` : ''}`;
+  }).join(' ');
+  const setCols = (mine, theirs) => mine.map((v, i) => {
+    const tb = [a.linescores?.[i]?.tiebreak, b.linescores?.[i]?.tiebreak].filter(t => t != null);
+    return { v, tb: tb.length && v < (theirs[i] ?? -1) ? Math.min(...tb) : null };
+  });
+  const side = (p, score, cols) => ({
+    id: p.id || '',
+    sets: cols,
+    name: p.athlete?.displayName || 'TBD',
+    logo: p.athlete?.flag?.href || '',
+    score: sa.length ? String(score) : null,
+    winner: p.winner === true,
+  });
+  const st = c.status?.type || {};
+  return {
+    id: 't' + c.id,
+    kind: 'tennis',
+    start: Date.parse(c.date),
+    timeValid: c.timeValid !== false,
+    tournament: ev.name || '',
+    round: c.round?.displayName || '',
+    home: side(a, won(sa, sb), setCols(sa, sb)),
+    away: side(b, won(sb, sa), setCols(sb, sa)),
+    setLine,
+    state: st.state || 'pre',
+    statusName: st.name || '',
+    statusText: st.shortDetail || st.description || '',
+    clock: st.shortDetail || '',
+    venue: ev.venue?.displayName || '',
+  };
+}
+
+// Jolpica (community successor of the Ergast F1 API), one request per season.
+async function fetchF1(years) {
+  const out = [];
+  const failed = [];
+  for (const y of years) {
+    try {
+      const d = await getJSON(`https://api.jolpi.ca/ergast/f1/${y}.json?limit=100`);
+      for (const race of d.MRData?.RaceTable?.Races || []) {
+        for (const [key, [label, cat]] of Object.entries(F1_SESSIONS)) {
+          const s = key === 'Race' ? { date: race.date, time: race.time } : race[key];
+          if (!s?.date) continue;
+          out.push({
+            id: `f1-${y}-${race.round}-${key}`,
+            kind: 'f1',
+            start: Date.parse(`${s.date}T${s.time || '00:00:00Z'}`),
+            timeValid: !!s.time,
+            raceName: race.raceName,
+            round: race.round,
+            location: [race.Circuit?.Location?.locality, race.Circuit?.Location?.country].filter(Boolean).join(', '),
+            session: label,
+            cat,
+          });
+        }
+      }
+    } catch { failed.push(`F1 ${y} 賽程`); }
+  }
+  return { list: out, failed };
+}
+
+async function refresh() {
+  const btn = document.getElementById('refresh');
+  btn.disabled = true; btn.textContent = '更新中…';
+  try {
+    // F1: fetch every season touched by the chosen range and the next two months.
+    const years = neededF1Years();
+    const teamJobs = [...state.tracked.map(t => ['soccer', t]), ...state.nbaTeams.map(t => ['nba', t])];
+    const [teamResults, f, tn] = await Promise.all([
+      Promise.allSettled(teamJobs.map(([sport, t]) => fetchTeamSchedule(sport, t))),
+      fetchF1(years),
+      fetchTennis(state.tennisPlayers, state.rangeStart, state.rangeEnd + DAY_MS),
+    ]);
+    const errors = [...f.failed, ...tn.failed];
+    const fresh = { soccer: [], nba: [] };
+    teamResults.forEach((r, i) => {
+      const [sport, team] = teamJobs[i];
+      if (r.status === 'fulfilled') fresh[sport] = mergeById(fresh[sport], r.value);
+      else {
+        errors.push(team.name);
+        // Keep the old data of a team that failed, so the page stays useful offline.
+        fresh[sport] = mergeById(fresh[sport], state[sport].filter(e => e.home.id === team.id || e.away.id === team.id));
+      }
+    });
+    state.soccer = fresh.soccer;
+    state.nba = fresh.nba;
+    if (!tn.allFailed) {
+      state.tennis = tn.list;
+      state.tennisCovered = { from: state.rangeStart, to: state.rangeEnd + DAY_MS };
+    }
+    if (f.list.length) {
+      const keep = state.f1.filter(x => !years.includes(tw(x.start).getUTCFullYear()));
+      state.f1 = [...keep, ...f.list];
+    }
+    years.forEach(y => { if (!f.failed.includes(`F1 ${y} 賽程`)) state.f1Years.add(y); });
+    state.errors = errors;
+    state.fetchedAt = Date.now();
+    saveStore({ soccer: state.soccer, nba: state.nba, tennis: state.tennis, f1: state.f1, fetchedAt: state.fetchedAt });
+  } finally {
+    btn.disabled = false; btn.textContent = '↻ 更新';
+    for (const k of Object.keys(stCache)) delete stCache[k];   // standings are re-fetched too
+    render();
+  }
+}
+
+// Fetch tennis again when the chosen date range goes outside what was fetched.
+async function ensureTennis() {
+  const c = state.tennisCovered;
+  if (!state.tennisPlayers.length || (c && c.from <= state.rangeStart && c.to >= state.rangeEnd + DAY_MS)) return;
+  const tn = await fetchTennis(state.tennisPlayers, state.rangeStart, state.rangeEnd + DAY_MS);
+  if (!tn.allFailed) {
+    state.tennis = mergeById(state.tennis, tn.list);
+    state.tennisCovered = { from: state.rangeStart, to: state.rangeEnd + DAY_MS };
+    saveStore({ tennis: state.tennis });
+  }
+  state.errors = [...state.errors, ...tn.failed];
+  render();
+}
+
+// Picker list for one sport + group: soccer league teams, NBA conference teams, or tennis rankings.
+// Team lists come from the standings endpoint because ESPN's /teams endpoint blocks browser requests (no CORS header).
+async function loadPickList(sport, group) {
+  const lists = state.pickLists[sport];
+  if (lists[group]) return;
+  try {
+    if (sport === 'soccer') {
+      const d = await getJSON(`${ESPN_STANDINGS}/soccer/${group}/standings`);
+      // Leagues split into conferences (e.g. MLS) have several "children" tables.
+      lists[group] = (d.children || []).flatMap(c => c.standings?.entries || [])
+        .map(x => ({ id: x.team.id, name: x.team.displayName, logo: x.team.logos?.[0]?.href || '' }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    } else if (sport === 'nba') {
+      const d = await getJSON(`${ESPN_STANDINGS}/basketball/nba/standings`);
+      for (const c of d.children || []) {
+        const key = /east/i.test(c.name) ? 'east' : /west/i.test(c.name) ? 'west' : null;
+        if (!key) continue;
+        lists[key] = (c.standings?.entries || [])
+          .map(x => ({ id: x.team.id, name: x.team.displayName, logo: x.team.logos?.[0]?.href || '' }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+      }
+      if (!lists[group]) throw new Error('missing conference');
+    } else {
+      // Tennis: current singles ranking (top 150), kept in ranking order.
+      const d = await getJSON(`${ESPN}/tennis/${group}/rankings`);
+      lists[group] = (d.rankings?.[0]?.ranks || []).map(r => ({
+        id: r.athlete.id, name: r.athlete.displayName, rank: r.current,
+        logo: typeof r.athlete.flag === 'string' ? r.athlete.flag : (r.athlete.flag?.href || ''),
+      }));
+    }
+  } catch {
+    lists[group] = null; // null = failed, allow retry
+  }
+}
+
+// =====================================================================
+// Filter pop-up: draft handling
+// =====================================================================
+// While the pop-up is open, every change goes into this draft copy.
+// "完成" applies the draft; "取消" (or Esc) throws it away.
+let draft = null;          // { tracked, nbaTeams, tennisPlayers, filters } or null when the pop-up is closed
+let openSnapshot = null;   // settings fingerprint at the moment the pop-up was opened
+const view = () => draft || state;   // what the pop-up shows
+
+const copySettings = (src) => ({
+  ...Object.fromEntries(FOLLOW_KEYS.map(k => [k, [...src[k]]])),
+  filters: JSON.parse(JSON.stringify(src.filters)),
+});
+
+// Comparable fingerprint of a settings object (arrays sorted, so ticking a box off and on again counts as no change).
+function settingsSnapshot(src) {
+  const f = src.filters;
+  return JSON.stringify({
+    ...Object.fromEntries(FOLLOW_KEYS.map(k => [k, src[k].map(t => t.id).sort()])),
+    types: [...f.types].sort(), nbaTypes: [...f.nbaTypes].sort(),
+    f1On: f.f1On, f1Cats: [...f.f1Cats].sort(), winStart: f.winStart, winEnd: f.winEnd,
+  });
+}
+const isDirty = () => !!draft && settingsSnapshot(draft) !== openSnapshot;
+
+// Apply confirmed settings: drop events of unfollowed teams/players, then fetch newly followed ones.
+async function applySettings(d) {
+  const added = {
+    soccer: d.tracked.filter(t => !follows('tracked', t.id)),
+    nba: d.nbaTeams.filter(t => !follows('nbaTeams', t.id)),
+  };
+  const tennisAdded = d.tennisPlayers.some(p => !follows('tennisPlayers', p.id));
+  for (const k of FOLLOW_KEYS) state[k] = d[k];
+  state.filters = d.filters;
+  const keep = (key) => (e) => follows(key, e.home.id) || follows(key, e.away.id);
+  state.soccer = state.soccer.filter(keep('tracked'));
+  state.nba = state.nba.filter(keep('nbaTeams'));
+  state.tennis = state.tennis.filter(keep('tennisPlayers'));
+  if (tennisAdded) state.tennisCovered = null;
+  saveStore({ tracked: state.tracked, nbaTeams: state.nbaTeams, tennisPlayers: state.tennisPlayers,
+    filters: state.filters, soccer: state.soccer, nba: state.nba, tennis: state.tennis });
+  renderFilters(); render();
+
+  const jobs = [...added.soccer.map(t => ['soccer', t]), ...added.nba.map(t => ['nba', t])];
+  const results = await Promise.allSettled(jobs.map(([sport, t]) => fetchTeamSchedule(sport, t)));
+  results.forEach((r, i) => {
+    const [sport, team] = jobs[i];
+    if (r.status === 'fulfilled') state[sport] = mergeById(state[sport], r.value);
+    else state.errors = [...state.errors, team.name];
+  });
+  if (jobs.length) saveStore({ soccer: state.soccer, nba: state.nba });
+  await ensureTennis();
+  render();
+}
+
+// =====================================================================
+// Rendering: filter pop-up
+// =====================================================================
+function chip(group, value, label, checked, logo = '', sport = '', rank = null) {
+  const img = logo ? `<img src="${esc(logo)}" alt="" loading="lazy">` : '';
+  const r = rank != null ? `<span class="rank">#${esc(rank)}</span>` : '';
+  return `<label class="chip ${checked ? 'on' : ''}"><input type="checkbox" data-group="${group}" data-sport="${sport}" value="${esc(value)}" ${checked ? 'checked' : ''}>${img}${r}${esc(label)}</label>`;
+}
+
+// Tabs and one panel per sport, built once from SPORT_TABS / FOLLOW.
+function buildSportPanels() {
+  document.getElementById('sportTabs').innerHTML = Object.entries(SPORT_TABS).map(([s, label]) =>
+    `<button class="sport-tab" role="tab" data-sport="${s}"><span class="emoji" aria-hidden="true">${SPORT_EMOJI[label] || ''}</span>${esc(label)}<span class="cnt" id="${s}-cnt"></span></button>`).join('');
+  document.getElementById('sportPanels').innerHTML = Object.keys(SPORT_TABS).map(s => {
+    if (s === 'f1') {
+      return `<section class="fsection sport-panel" data-sport="f1">
+        <div class="fgroup"><div class="ftitle">要顯示的賽段</div><div class="chips" id="f1Chips"></div></div>
+      </section>`;
+    }
+    const f = FOLLOW[s];
+    return `<section class="fsection sport-panel" data-sport="${s}">
+      <div class="fgroup">
+        <div class="ftitle">追蹤中的${f.what}（按 ✕ 移除）</div>
+        <div class="chips" id="${s}-tracked"></div>
+      </div>
+      <div class="fgroup">
+        <details class="picker-box" id="${s}-picker">
+          <summary class="ftitle">新增／移除${f.what}：先選${f.groupWord}，再勾選${f.what}</summary>
+          <div class="picker">
+            <div class="pick-bar">
+              <select id="${s}-select" data-sport="${s}"></select>
+              <button type="button" data-pick-all="${s}">全選</button>
+              <button type="button" data-pick-none="${s}">全不選</button>
+            </div>
+            <div class="chips" id="${s}-pick"></div>
+          </div>
+        </details>
+      </div>
+      <div class="fgroup" id="${s}-extra"></div>
+    </section>`;
+  }).join('');
+}
+
+function renderPicker(sport) {
+  const box = document.getElementById(`${sport}-pick`);
+  const key = FOLLOW[sport].key;
+  const items = state.pickLists[sport][state.pickGroup[sport]];
+  const ready = Array.isArray(items);
+  document.querySelectorAll(`[data-pick-all="${sport}"], [data-pick-none="${sport}"]`).forEach(b => { b.disabled = !ready; });
+  if (items === undefined) { box.innerHTML = '<span class="hint">載入清單中…</span>'; return; }
+  if (items === null) { box.innerHTML = '<span class="hint">清單載入失敗，請重新選一次。</span>'; return; }
+  box.innerHTML = items.map(t => chip('pick', t.id, t.name, follows(key, t.id, view()), t.logo, sport, t.rank)).join('');
+}
+
+function renderFilters() {
+  const src = view();
+  const f = src.filters;
+  // The button shows the applied settings, not the draft.
+  const fb = document.getElementById('openFilters');
+  fb.innerHTML = `${FILTER_ICON}<span class="fb-label">篩選器・追蹤 </span>${followCount()}`;
+  fb.setAttribute('aria-label', `篩選器・追蹤 ${followCount()}`);   // screen readers still hear the full name
+
+  for (const [sport, cfg] of Object.entries(FOLLOW)) {
+    const list = src[cfg.key];
+    document.getElementById(`${sport}-tracked`).innerHTML = list.length
+      ? list.map(t => `<span class="chip on">${t.logo ? `<img src="${esc(t.logo)}" alt="" loading="lazy">` : ''}${esc(t.name)}<span class="hint">${esc(cfg.groups[t.group] || '')}</span><button class="x" data-remove="${esc(t.id)}" data-sport="${sport}" title="移除">✕</button></span>`).join('')
+      : `<span class="hint">目前沒有追蹤任何${cfg.what}，請從下方選擇。</span>`;
+    document.getElementById(`${sport}-select`).innerHTML = Object.entries(cfg.groups)
+      .map(([k, v]) => `<option value="${k}" ${k === state.pickGroup[sport] ? 'selected' : ''}>${esc(v)}</option>`).join('');
+    document.getElementById(`${sport}-cnt`).textContent = list.length ? `(${list.length})` : '';
+    renderPicker(sport);
+  }
+  document.getElementById('soccer-extra').innerHTML = `<div class="ftitle">賽事類型</div>
+    <div class="chips">${Object.entries(COMP_TYPES).map(([k, v]) => chip('types', k, v, f.types.includes(k))).join('')}</div>
+    <div class="hint" style="margin-top:4px">杯賽包含各國盃賽、超級盃，以及歐冠／歐霸／歐協聯等洲際賽事。</div>`;
+  document.getElementById('nba-extra').innerHTML = `<div class="ftitle">賽季階段</div>
+    <div class="chips">${Object.entries(NBA_TYPES).map(([k, v]) => chip('nbaTypes', k, v, f.nbaTypes.includes(k))).join('')}</div>
+    <div class="hint" style="margin-top:4px">季後賽包含附加賽（Play-In）。</div>`;
+  document.getElementById('tennis-extra').innerHTML = `<div class="hint">只顯示單打。清單是目前排名前 150 名。
+    網球的比賽通常要到前一天才排定時間，之前會顯示「時間未定」。</div>`;
+  document.getElementById('f1Chips').innerHTML =
+    chip('f1On', '1', '顯示 F1', f.f1On) +
+    Object.entries(F1_CATEGORIES).map(([k, v]) => chip('f1Cats', k, v, f.f1Cats.includes(k))).join('');
+  document.getElementById('f1-cnt').textContent = f.f1On ? '' : '(關)';
+  for (const k of ['winStart', 'winEnd']) {
+    document.getElementById(k).innerHTML = WIN_OPTIONS
+      .map(m => `<option value="${m}" ${m === f[k] ? 'selected' : ''}>${minToHM(m)}</option>`).join('');
+  }
+
+  // Sport tabs: show only the selected sport's panel.
+  document.querySelectorAll('.sport-tab').forEach(b => {
+    const on = b.dataset.sport === state.sportTab;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on);
+  });
+  document.querySelectorAll('.sport-panel').forEach(p => p.classList.toggle('active', p.dataset.sport === state.sportTab));
+  // "完成" is enabled only when the draft differs from the applied settings.
+  document.getElementById('closeFilters').disabled = !isDirty();
+}
+
+// =====================================================================
+// Rendering: schedule
+// =====================================================================
+function neededF1Years() {
+  const now = Date.now();
+  return [...new Set([now, state.rangeStart, state.rangeEnd, now + 60 * DAY_MS].map(ms => tw(ms).getUTCFullYear()))];
+}
+
+// Items in [from, to) that pass the filters (outside-window ones included; render() drops them).
+function visibleItems(from, to) {
+  const f = state.filters;
+  const inRange = (e) => e.start >= from && e.start < to;
+  const involves = (key) => (e) => follows(key, e.home.id) || follows(key, e.away.id);
+  const items = [
+    ...state.soccer.filter(e => inRange(e) && f.types.includes(e.type) && involves('tracked')(e)),
+    ...state.nba.filter(e => inRange(e) && f.nbaTypes.includes(e.type) && involves('nbaTeams')(e)),
+    ...state.tennis.filter(e => inRange(e) && involves('tennisPlayers')(e)),
+    ...(f.f1On ? state.f1.filter(s => inRange(s) && f.f1Cats.includes(s.cat)) : []),
+  ];
+  return items.sort((a, b) => a.start - b.start);
+}
+
+// Google search for a finished match. ESPN data has no Google match ID, so we search
+// "Home vs Away <date>" — Google usually shows the match card (with stats) at the top.
+function googleStatsUrl(e) {
+  const d = new Date(e.start);
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const date = `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  return 'https://www.google.com/search?hl=zh-TW&q=' + encodeURIComponent(`${e.home.name} vs ${e.away.name} ${date}`);
+}
+
+// Status pills shown at the top-right of a card (text, not just color).
+function statusPills(e) {
+  const out = [];
+  const cancelled = /POSTPONED|CANCELED|SUSPENDED/.test(e.statusName);
+  if (!e.timeValid) out.push(['warn', '時間未定']);
+  if (cancelled) out.push(['warn', TENNIS_STATUS[e.statusName] || e.statusText]);
+  else if (e.state === 'in') out.push(['live', `進行中 ${e.clock || ''}`.trim()]);
+  else if (e.state === 'post') {
+    out.push(['', '已結束']);
+    if (e.kind === 'tennis' && TENNIS_STATUS[e.statusName]) out.push(['', TENNIS_STATUS[e.statusName]]);
+  }
+  return out.map(([cls, t]) => `<span class="status ${cls}">${esc(t)}</span>`).join('');
+}
+
+// Soccer, NBA and tennis share one layout: two sides stacked, scores right-aligned.
+function renderVersus(e) {
+  const finished = e.state === 'post' && !/POSTPONED|CANCELED/.test(e.statusName);
+  const showScore = e.state !== 'pre' && e.home.score != null;
+  const hasWinner = finished && (e.home.winner || e.away.winner);
+  // Finished soccer match with no winner flag = draw: both sides get "和" where "勝" would be.
+  const isDraw = finished && !hasWinner && e.kind === 'soccer' && showScore;
+  const logo = (s) => s.logo ? `<img src="${esc(s.logo)}" alt="" loading="lazy">` : '';
+  // Tennis shows games per set (tiebreak points as superscript); other sports show one score.
+  const pts = (s) => {
+    if (!showScore) return '<div class="pts"></div>';
+    if (s.sets?.length) return `<div class="pts">${s.sets.map(x => `<span>${esc(x.v)}${x.tb != null ? `<sup>${esc(x.tb)}</sup>` : ''}</span>`).join('')}</div>`;
+    return `<div class="pts"><span>${esc(s.score)}</span></div>`;
+  };
+  const side = (s) => {
+    const cls = hasWinner && !s.winner ? 'side lose' : 'side';
+    const tag = hasWinner && s.winner ? '<span class="win">勝</span>' : isDraw ? '<span class="win draw">和</span>' : '';
+    return `<div class="${cls}">${logo(s)}<span class="nm">${esc(s.name)}</span>${tag}</div>${pts(s)}`;
+  };
+  return `<div class="sides">${side(e.home)}${side(e.away)}</div>`;
+}
+
+function renderItem(e) {
+  const when = e.timeValid
+    ? `<div class="when">${fmtTime(e.start)}<small>${fmtWeekday(e.start)}</small></div>`
+    : `<div class="when tbd">未定<small>${fmtWeekday(e.start)}</small></div>`;
+  let sport, comp, body, foot = [];
+  if (e.kind === 'soccer') {
+    sport = '足球';
+    // Skip stage names that are just the season name (league matches).
+    comp = [e.compName, e.stage && !/^\d{4}/.test(e.stage) ? (STAGES[e.stage] || e.stage) : ''];
+    body = renderVersus(e);
+    foot.push(e.venue);
+  } else if (e.kind === 'nba') {
+    sport = 'NBA';
+    comp = [NBA_TYPES[e.type]];
+    body = renderVersus(e);
+    foot.push(e.venue);
+  } else if (e.kind === 'tennis') {
+    sport = '網球';
+    comp = [e.tournament, TENNIS_ROUNDS[e.round] || e.round];
+    body = renderVersus(e);
+    foot.push('單打', e.venue);
+  } else {
+    sport = 'F1';
+    comp = [`第 ${e.round} 站`, e.location];
+    body = `<div class="f1-name">${esc(e.raceName)}・${esc(e.session)}</div>`;
+  }
+  const finished = e.kind !== 'f1' && e.state === 'post' && !/POSTPONED|CANCELED/.test(e.statusName);
+  const stats = finished ? `<a class="stats" href="${esc(googleStatsUrl(e))}" target="_blank" rel="noopener">賽事數據<span class="arr">→</span></a>` : '';
+  const footText = foot.filter(Boolean).map(esc).join('・');
+  const footHtml = footText || stats ? `<div class="foot"><span>${footText}</span>${stats}</div>` : '';
+  const head = `<div class="head"><span class="comp"><em><span class="emoji" aria-hidden="true">${SPORT_EMOJI[sport] || ''}</span>${esc(sport)}</em>・${comp.filter(Boolean).map(esc).join('・')}</span>
+    <span class="statuses">${statusPills(e)}</span></div>`;
+  return `<article class="item">${when}<div>${head}${body}${footHtml}</div></article>`;
+}
+
+function render() {
+  renderStandings();   // sidebar tabs follow the followed sports
+  document.getElementById('rangeStart').value = toInputDate(state.rangeStart);
+  document.getElementById('rangeEnd').value = toInputDate(state.rangeEnd);
+  syncDateText();
+  document.getElementById('updated').textContent = state.fetchedAt
+    ? `更新於 ${fmtDate(state.fetchedAt)} ${fmtTime(state.fetchedAt)}`
+    : '尚未載入';
+  document.getElementById('windowText').textContent =
+    `開賽時間 ${minToHM(state.filters.winStart)}–${minToHM(state.filters.winEnd)}（台灣時間）`;
+
+  const notices = [];
+  if (!followCount()) notices.push('還沒有追蹤任何球隊或選手，請按「篩選器」選擇，也可以在那裡設定開賽時間。');
+  if (state.errors.length) notices.push(`部分資料載入失敗：${[...new Set(state.errors)].join('、')}。顯示的可能是上次的資料，請稍後再按「更新賽程」。`);
+  document.getElementById('notices').innerHTML = notices.map(n => `<div class="notice">${esc(n)}</div>`).join('');
+
+  // Whole range: used for the summary line and the per-tab counts.
+  const items = visibleItems(state.rangeStart, state.rangeEnd + DAY_MS);
+  // Matches with unknown kickoff time are always shown (we can't judge them).
+  const isLate = (e) => e.timeValid && !inWindow(e.start);
+  const ok = items.filter(e => !isLate(e));
+  const late = items.filter(isLate);
+  const shown = ok;
+
+  // Summary: only sports that are followed (or F1 when it is on).
+  const count = (kind) => ok.filter(e => e.kind === kind).length;
+  const parts = [];
+  if (state.tracked.length) parts.push(`足球 ${count('soccer')} 場`);
+  if (state.nbaTeams.length) parts.push(`NBA ${count('nba')} 場`);
+  if (state.tennisPlayers.length) parts.push(`網球 ${count('tennis')} 場`);
+  if (state.filters.f1On) parts.push(`F1 ${count('f1')} 節`);
+  document.getElementById('summary').textContent =
+    `這段期間可看：${parts.join('、') || '0 場'}` + (late.length ? `（另有 ${late.length} 場不在開賽時間內，未顯示）` : '');
+
+  // One tab per day.
+  const today = dayStartOf(Date.now());
+  const tabs = [];
+  for (let day = state.rangeStart; day <= state.rangeEnd; day += DAY_MS) {
+    const n = shown.filter(e => e.start >= day && e.start < day + DAY_MS).length;
+    const cls = ['tab', day === state.selectedDay ? 'active' : '', day === today ? 'today' : '', n ? '' : 'empty-day'].join(' ');
+    tabs.push(`<button class="${cls}" role="tab" data-day="${day}" aria-selected="${day === state.selectedDay}">
+      <span class="d">${tw(day).getUTCMonth() + 1}/${tw(day).getUTCDate()}</span><span class="n">${day === today ? '今天' : fmtWeekday(day)}・${n} 場</span></button>`);
+  }
+  document.getElementById('tabs').innerHTML = tabs.join('');
+
+  // Selected day only.
+  const dayItems = shown.filter(e => e.start >= state.selectedDay && e.start < state.selectedDay + DAY_MS);
+  if (!dayItems.length) {
+    const msg = !followCount() && !state.filters.f1On
+      ? '還沒有追蹤任何球隊或選手。<br><button class="primary" onclick="document.getElementById(\'openFilters\').click()">開啟篩選器開始選擇</button>'
+      : (state.fetchedAt ? '這天沒有符合條件的比賽' : '載入中…');
+    document.getElementById('list').innerHTML = `<div class="empty">${msg}</div>`;
+    return;
+  }
+  document.getElementById('list').innerHTML = dayItems.map(renderItem).join('');
+}
+
+// =====================================================================
+// Standings sidebar
+// =====================================================================
+// View choice is remembered; data is cached for this session only (cleared by "更新").
+const stView = { sport: null, soccer: null, nba: 'east', tennis: 'atp', f1: 'drivers', ...(stored.standingsView || {}) };
+const stCache = {};   // key -> rows array, or null when loading failed
+
+// Sports shown as tabs: the ones being followed (F1 when it is on). Nothing followed -> all of them.
+function standingsSports() {
+  const list = ['soccer', 'nba', 'tennis', 'f1'].filter(s =>
+    s === 'f1' ? state.filters.f1On : state[FOLLOW[s].key].length);
+  return list.length ? list : ['soccer', 'nba', 'tennis', 'f1'];
+}
+
+// Key of the table currently chosen for a sport, e.g. "soccer:eng.1", "nba:east".
+function standingsKey(sport) {
+  if (sport === 'soccer') {
+    // Default: the league of the first followed team that has a table.
+    const own = state.tracked.map(t => t.group).find(g => STANDINGS_SOCCER[g]);
+    if (!STANDINGS_SOCCER[stView.soccer]) stView.soccer = own || 'eng.1';
+    return `soccer:${stView.soccer}`;
+  }
+  return `${sport}:${stView[sport]}`;
+}
+
+const statOf = (entry, name) => (entry.stats || []).find(x => x.name === name)?.displayValue ?? '';
+
+async function fetchStandings(key) {
+  const [sport, sub] = key.split(':');
+  if (sport === 'soccer') {
+    const d = await getJSON(`${ESPN_STANDINGS}/soccer/${sub}/standings`);
+    const entries = (d.children || [d])[0]?.standings?.entries || [];
+    // Short names (e.g. "Man City") so the extra W/D/L columns fit; the full name shows on hover.
+    return entries.map(e => ({ id: e.team?.id, name: e.team?.shortDisplayName || e.team?.displayName, full: e.team?.displayName, logo: e.team?.logos?.[0]?.href || '',
+      rank: Number(statOf(e, 'rank')), cols: [statOf(e, 'wins'), statOf(e, 'ties'), statOf(e, 'losses'), statOf(e, 'pointDifferential')], pts: statOf(e, 'points') }))
+      .sort((a, b) => a.rank - b.rank);
+  }
+  if (sport === 'nba') {
+    const d = await getJSON(`${ESPN_STANDINGS}/basketball/nba/standings`);
+    const conf = (d.children || []).find(c => (sub === 'east' ? /East/ : /West/).test(c.name || '')) || {};
+    return (conf.standings?.entries || []).map(e => ({ id: e.team?.id, name: e.team?.displayName, logo: e.team?.logos?.[0]?.href || '',
+      rank: Number(statOf(e, 'playoffSeed')), cols: [statOf(e, 'wins'), statOf(e, 'losses')], pts: statOf(e, 'gamesBehind') }))
+      .sort((a, b) => a.rank - b.rank);
+  }
+  if (sport === 'tennis') {
+    const d = await getJSON(`${ESPN}/tennis/${sub}/rankings`);
+    return (d.rankings?.[0]?.ranks || []).map(r => ({ id: r.athlete?.id, name: r.athlete?.displayName,
+      logo: typeof r.athlete?.flag === 'string' ? r.athlete.flag : (r.athlete?.flag?.href || ''),
+      rank: Number(r.current), cols: [], pts: Math.round(r.points || 0).toLocaleString('en-US') }));
+  }
+  // F1 (ESPN): drivers come with a country flag; constructors only with a team color (ESPN has no team logos)
+  const d = await getJSON(`${ESPN_STANDINGS}/racing/f1/standings`);
+  const table = (d.children || []).find(c => (sub === 'drivers' ? /Driver/ : /Constructor/).test(c.name || '')) || {};
+  return (table.standings?.entries || []).map(e => ({
+    id: '', name: e.athlete?.displayName || e.team?.displayName,
+    logo: e.athlete?.flag?.href || '',
+    color: /^[0-9A-Fa-f]{6}$/.test(e.team?.color || '') ? e.team.color : '',
+    rank: Number(statOf(e, 'rank')), cols: [], pts: statOf(e, 'championshipPts') || statOf(e, 'points') }))
+    .sort((a, b) => a.rank - b.rank);
+}
+
+// Column headers per sport: [rank, name, ...extra cols, last col]
+const STANDINGS_HEAD = {
+  soccer: ['#', '球隊', '勝', '和', '負', '淨勝', '積分'],
+  nba: ['種子', '球隊', '勝', '負', '勝差'],
+  tennis: ['#', '選手', '積分'],
+  f1: ['#', '名字', '積分'],
+};
+const STANDINGS_SOURCE = { soccer: 'ESPN・本季', nba: 'ESPN・本季', tennis: 'ESPN・最新世界排名', f1: 'ESPN・本季' };
+
+function renderStandings() {
+  const sports = standingsSports();
+  if (!sports.includes(stView.sport)) stView.sport = sports[0];
+  const sport = stView.sport;
+  document.getElementById('stTabs').innerHTML = sports.map(s =>
+    `<button class="st-tab ${s === sport ? 'active' : ''}" role="tab" aria-selected="${s === sport}" data-st-sport="${s}"><span class="emoji" aria-hidden="true">${SPORT_EMOJI[SPORT_TABS[s]]}</span>${esc(SPORT_TABS[s])}</button>`).join('');
+
+  const key = standingsKey(sport);
+  document.getElementById('stSub').innerHTML = sport === 'soccer'
+    ? `<select id="stSoccer" aria-label="選擇聯賽">${Object.entries(STANDINGS_SOCCER).map(([k, v]) =>
+        `<option value="${k}" ${k === stView.soccer ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`
+    : Object.entries(STANDINGS_SUB[sport]).map(([k, v]) =>
+        `<button class="${k === stView[sport] ? 'on' : ''}" data-st-sub="${k}">${esc(v)}</button>`).join('');
+
+  const box = document.getElementById('stTable');
+  const note = document.getElementById('stNote');
+  const rows = stCache[key];
+  if (rows === undefined) {
+    box.innerHTML = '<div class="st-msg">載入中…</div>'; note.textContent = '';
+    stCache[key] = fetchStandings(key)
+      .then(r => { stCache[key] = r; }, () => { stCache[key] = null; })
+      .then(() => { if (standingsKey(stView.sport) === key) renderStandings(); });
+    return;
+  }
+  if (rows instanceof Promise) return;   // still loading
+  if (rows === null || !rows.length) {
+    box.innerHTML = '<div class="st-msg">排名載入失敗，請按上方的「↻ 更新」再試一次。</div>'; note.textContent = '';
+    return;
+  }
+  // Followed teams / players are highlighted.
+  const followKey = FOLLOW[sport]?.key;
+  const mine = (r) => followKey && r.id && follows(followKey, String(r.id));
+  let shown = rows;
+  if (sport === 'tennis') {
+    // Top 20, then a "…" row, then followed players ranked lower.
+    const extra = rows.slice(STANDINGS_TENNIS_TOP).filter(mine);
+    shown = [...rows.slice(0, STANDINGS_TENNIS_TOP), ...(extra.length ? [null, ...extra] : [])];
+  }
+  const head = STANDINGS_HEAD[sport];
+  box.innerHTML = `<table class="st-table"><thead><tr>${head.map((h, i) => `<th class="${i === 1 ? 'nm' : ''}">${esc(h)}</th>`).join('')}</tr></thead><tbody>${
+    shown.map(r => r === null
+      ? `<tr class="gap"><td colspan="${head.length}">⋯</td></tr>`
+      : `<tr class="${mine(r) ? 'mine' : ''}"><td class="rk">${esc(r.rank)}</td><td class="nm" title="${esc(r.full || r.name)}">${r.logo ? `<img src="${esc(r.logo)}" alt="" loading="lazy">` : ''}${r.color ? `<span class="tdot" style="background:#${r.color}"></span>` : ''}${esc(r.name)}</td>${
+          r.cols.map(c => `<td>${esc(c)}</td>`).join('')}<td class="st-pts">${esc(r.pts)}</td></tr>`).join('')
+  }</tbody></table>`;
+  note.textContent = `資料：${STANDINGS_SOURCE[sport]}${rows.note ? `・${rows.note}` : ''}${followKey ? '・底色標示的是你追蹤的' + FOLLOW[sport].what : ''}`;
+}
+
+// Apply a new date range (Taiwan-midnight timestamps). Swaps reversed dates and caps the length.
+function setRange(start, end) {
+  if (end < start) [start, end] = [end, start];
+  if (end - start > (MAX_RANGE_DAYS - 1) * DAY_MS) end = start + (MAX_RANGE_DAYS - 1) * DAY_MS;
+  state.rangeStart = start;
+  state.rangeEnd = end;
+  const today = dayStartOf(Date.now());
+  state.selectedDay = today >= start && today <= end ? today : start;
+  render();
+  document.querySelector('.tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  // Soccer and NBA data already cover the whole current season; F1 and tennis may need more.
+  if (neededF1Years().some(y => !state.f1Years.has(y))) refresh();
+  else ensureTennis();
+}
+
+// =====================================================================
+// Events
+// =====================================================================
+document.getElementById('thisWeek').onclick = () => {
+  const ws = weekStartOf(Date.now());
+  setRange(ws, ws + 6 * DAY_MS);
+};
+// Show the date as 2026/10/19 on every device (the input's own text is hidden)
+function syncDateText() {
+  for (const id of ['rangeStart', 'rangeEnd']) {
+    const v = document.getElementById(id).value;   // "2026-10-19"
+    document.getElementById(id + 'Text').textContent = v ? v.replace(/-/g, '/') : '';
+  }
+}
+for (const id of ['rangeStart', 'rangeEnd']) {
+  const el = document.getElementById(id);
+  // Open the calendar on any click (otherwise desktop Chrome edits the hidden text instead)
+  el.addEventListener('click', () => { try { el.showPicker(); } catch (_) {} });
+  el.addEventListener('input', syncDateText);
+  el.addEventListener('change', () => {
+    const s = document.getElementById('rangeStart').value, e = document.getElementById('rangeEnd').value;
+    if (s && e) setRange(fromInputDate(s), fromInputDate(e));
+    else {   // the iPhone picker's "Reset" empties the field: put the current dates back
+      document.getElementById('rangeStart').value = toInputDate(state.rangeStart);
+      document.getElementById('rangeEnd').value = toInputDate(state.rangeEnd);
+      syncDateText();
+    }
+  });
+}
+document.getElementById('tabs').addEventListener('click', (ev) => {
+  const tab = ev.target.closest('.tab');
+  if (!tab) return;
+  state.selectedDay = Number(tab.dataset.day);
+  render();
+});
+document.getElementById('refresh').onclick = refresh;
+
+// Filter pop-up.
+buildSportPanels();
+const dlg = document.getElementById('filtersBox');
+const settingsMsg = (text) => { document.getElementById('settingsMsg').textContent = text; };
+
+document.getElementById('openFilters').onclick = () => {
+  // Work on a copy; nothing changes on the page until "完成".
+  draft = copySettings(state);
+  openSnapshot = settingsSnapshot(draft);
+  // Each picker starts expanded only when nothing is followed in that sport yet.
+  for (const [sport, cfg] of Object.entries(FOLLOW)) {
+    document.getElementById(`${sport}-picker`).open = !state[cfg.key].length;
+    loadPickList(sport, state.pickGroup[sport]).then(() => renderPicker(sport));
+  }
+  settingsMsg('');
+  renderFilters();
+  dlg.showModal();
+};
+
+// "完成": apply the draft, save it, fetch schedules of newly followed teams/players.
+document.getElementById('closeFilters').onclick = async () => {
+  const d = draft;
+  draft = null;
+  dlg.close();
+  await applySettings(d);
+};
+
+// "取消", Esc, or closing in any other way: discard the draft.
+document.getElementById('cancelFilters').onclick = () => dlg.close();
+dlg.addEventListener('close', () => { draft = null; openSnapshot = null; renderFilters(); });
+// Clicking the dark backdrop closes only when nothing was changed, so edits are not lost by accident.
+dlg.addEventListener('click', (ev) => { if (ev.target === dlg && !isDirty()) dlg.close(); });
+
+document.getElementById('sportTabs').addEventListener('click', (ev) => {
+  const tab = ev.target.closest('.sport-tab');
+  if (!tab) return;
+  state.sportTab = tab.dataset.sport;
+  renderFilters();
+});
+
+// Settings: export / import as a JSON file, clear. Import and clear also go into the draft.
+document.getElementById('exportSettings').onclick = () => {
+  const src = view();
+  const data = JSON.stringify({ app: 'match-schedule', version: 3, ...copySettings(src) }, null, 2);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
+  a.download = 'match-schedule-settings.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  settingsMsg('已匯出 match-schedule-settings.json（在「下載項目」資料夾）。');
+};
+
+document.getElementById('importSettings').onclick = () => document.getElementById('importFile').click();
+document.getElementById('importFile').addEventListener('change', async (ev) => {
+  const file = ev.target.files[0];
+  ev.target.value = '';  // allow importing the same file again later
+  if (!file || !draft) return;
+  try {
+    const data = JSON.parse(await file.text());
+    // Validate before using. Version 2 files only have soccer teams ("tracked").
+    if (data.app !== 'match-schedule' || !Array.isArray(data.tracked)) throw new Error('bad file');
+    for (const k of FOLLOW_KEYS) draft[k] = cleanFollowList(data[k]);
+    draft.filters = { ...DEFAULT_FILTERS, ...(data.filters || {}) };
+    delete draft.filters.showLate;
+    draft.filters.winStart = snapWin(draft.filters.winStart);
+    draft.filters.winEnd = snapWin(draft.filters.winEnd);
+    settingsMsg(`已讀入 ${followCount(draft)} 個追蹤項目。按「完成」套用，按「取消」放棄。`);
+    renderFilters();
+  } catch {
+    settingsMsg('匯入失敗：這不是本工具匯出的設定檔。');
+  }
+});
+
+document.getElementById('resetSettings').onclick = () => {
+  if (!draft) return;
+  for (const k of FOLLOW_KEYS) draft[k] = [];
+  draft.filters = JSON.parse(JSON.stringify(DEFAULT_FILTERS));
+  settingsMsg('已清空。按「完成」套用，按「取消」放棄。');
+  renderFilters();
+};
+
+// Picker group (league / conference / tour) changed.
+dlg.addEventListener('change', async (ev) => {
+  const sel = ev.target;
+  // Kickoff window selects (draft only, like the other filters)
+  if (sel.dataset.win && draft) { draft.filters[sel.dataset.win] = Number(sel.value); renderFilters(); return; }
+  if (sel.tagName !== 'SELECT' || !sel.dataset.sport) return;
+  const sport = sel.dataset.sport;
+  state.pickGroup[sport] = sel.value;
+  saveStore({ pickGroup: state.pickGroup });
+  if (state.pickLists[sport][sel.value] === null) delete state.pickLists[sport][sel.value];
+  renderPicker(sport);
+  await loadPickList(sport, sel.value);
+  renderPicker(sport);
+});
+
+// Checkbox changes inside the pop-up only touch the draft.
+dlg.addEventListener('change', (ev) => {
+  const input = ev.target;
+  const group = input.dataset.group;
+  if (!group || !draft) return;
+  if (group === 'pick') {
+    const sport = input.dataset.sport;
+    const key = FOLLOW[sport].key;
+    const t = (state.pickLists[sport][state.pickGroup[sport]] || []).find(x => x.id === input.value);
+    if (input.checked && t) draft[key] = [...draft[key], { id: t.id, name: t.name, group: state.pickGroup[sport], logo: t.logo }];
+    else draft[key] = draft[key].filter(x => x.id !== input.value);
+  } else {
+    const f = draft.filters;
+    if (group === 'f1On') f[group] = input.checked;
+    else f[group] = input.checked ? [...new Set([...f[group], input.value])] : f[group].filter(v => v !== input.value);
+  }
+  renderFilters();
+});
+
+// "全選此…" / "全不選": follow or unfollow every team / player in the chosen league, conference or tour.
+dlg.addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-pick-all], [data-pick-none]');
+  if (!b || !draft) return;
+  const sport = b.dataset.pickAll || b.dataset.pickNone;
+  const key = FOLLOW[sport].key;
+  const group = state.pickGroup[sport];
+  const items = state.pickLists[sport][group] || [];
+  const ids = new Set(items.map(t => t.id));
+  if (b.dataset.pickAll) {
+    const add = items.filter(t => !follows(key, t.id, draft)).map(t => ({ id: t.id, name: t.name, group, logo: t.logo }));
+    draft[key] = [...draft[key], ...add];
+  } else {
+    draft[key] = draft[key].filter(t => !ids.has(t.id));
+  }
+  renderFilters();
+});
+
+dlg.addEventListener('click', (ev) => {
+  const id = ev.target.dataset.remove;
+  if (!id || !draft) return;
+  ev.preventDefault();
+  const key = FOLLOW[ev.target.dataset.sport].key;
+  draft[key] = draft[key].filter(t => t.id !== id);
+  renderFilters();
+});
+
+// Standings sidebar: sport tabs, sub switches, soccer league dropdown.
+const saveStView = () => saveStore({ standingsView: stView });
+document.getElementById('stTabs').addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-st-sport]');
+  if (!b) return;
+  stView.sport = b.dataset.stSport; saveStView(); renderStandings();
+});
+document.getElementById('stSub').addEventListener('click', (ev) => {
+  const b = ev.target.closest('[data-st-sub]');
+  if (!b) return;
+  stView[stView.sport] = b.dataset.stSub; saveStView(); renderStandings();
+});
+document.getElementById('stSub').addEventListener('change', (ev) => {
+  if (ev.target.id !== 'stSoccer') return;
+  stView.soccer = ev.target.value; saveStView(); renderStandings();
+});
+
+// Show cached data immediately, then fetch fresh data.
+renderFilters();
+render();
+refresh();
+</script>
+</body>
+</html>
