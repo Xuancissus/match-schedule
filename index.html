@@ -239,7 +239,6 @@
   .sport-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-5); }
   .sport-tab { background: none; border-color: transparent; color: var(--color-text-muted); }
   .sport-tab:hover { color: var(--color-text); border-color: var(--color-divider); }
-  .sport-tab .cnt { font-size: var(--fs-micro); margin-left: 3px; }
   .sport-tab.active { background: var(--color-secondary); border-color: var(--color-secondary); color: var(--color-on-secondary); }
   .sport-panel { display: none; margin-top: var(--sp-3); }
   .sport-panel.active { display: block; }
@@ -279,6 +278,7 @@
   }
   .pick-bar { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-3); }
   .pick-bar button:disabled { cursor: default; }
+  .pick-bar select[hidden] { display: none; }
   .hint { color: var(--color-text-muted); font-size: var(--fs-caption); }
   .ico { width: 18px; height: 18px; vertical-align: -3px; margin-right: 6px; flex: none; }
   .dlg-head h2 { display: flex; align-items: center; }
@@ -309,6 +309,8 @@
     /* Followed list and picker: one item per row, all the same width */
     .pick-bar { flex-wrap: nowrap; }
     .pick-bar select { flex: 1; min-width: 0; }
+    .pick-bar.two-selects { flex-wrap: wrap; }
+    .pick-bar.two-selects select { flex: 1 1 calc(50% - var(--sp-2)); }
     .pick-bar button { flex: none; }
     .list-rows { flex-direction: column; flex-wrap: nowrap; gap: var(--sp-1); }
     .list-rows .chip { display: flex; width: 100%; }
@@ -488,18 +490,75 @@ const F1_SESSIONS = {
 const F1_CATEGORIES = { practice: '練習賽', qualifying: '排位賽', sprint: '衝刺賽', race: '正賽' };
 
 // --- Sports in the filter pop-up -----------------------------------
-// Order of the sport tabs.
-const SPORT_TABS = { soccer: '足球', nba: 'NBA', tennis: '網球', f1: 'F1' };
-
-// Sports where the user follows teams/players picked from a list.
-//   key:      where the followed list is kept in state / settings
-//   groups:   the first-level choice in the picker (league, conference, tour)
+// Data sources the user can follow teams / players from. To add one, add an entry here,
+// then offer it as a league in SPORT_TABS below.
+//   key:           where the followed list is kept in state / settings
+//   label:         name in the summary line and on match cards
+//   what:          what is followed (球隊, 選手)
+//   teamUrls:      schedule requests of one team (sources fetched team by team)
+//   eventFields:   source-specific fields of a normalized event
+//   loadList:      fills the picker list of one group
+//   cardLabels:    competition line and footer of a match card
 const FOLLOW = {
-  soccer: { key: 'tracked',       groups: PICKER_LEAGUES, what: '球隊', groupWord: '聯賽' },
-  nba:    { key: 'nbaTeams',      groups: NBA_CONFS,      what: '球隊', groupWord: '分區' },
-  tennis: { key: 'tennisPlayers', groups: TENNIS_TOURS,   what: '選手', groupWord: '巡迴賽' },
+  soccer: {
+    key: 'tracked', label: '足球', what: '球隊',
+    // ESPN's "all" path returns every competition; without "fixture=true" it gives played matches, with it, upcoming ones.
+    teamUrls: (id) => [`${ESPN}/soccer/all/teams/${id}/schedule`, `${ESPN}/soccer/all/teams/${id}/schedule?fixture=true`],
+    eventFields: (e, c) => {
+      const slug = e.league?.slug || '';
+      return { id: 's' + e.id, comp: slug, compName: COMP_NAMES[slug] || e.league?.name || slug, type: compType(slug),
+        stage: e.seasonType?.name || '', clock: c.status?.displayClock || '' };
+    },
+    loadList: loadSoccerList,
+    // Skip stage names that are just the season name (league matches).
+    cardLabels: (e) => ({ comp: [e.compName, e.stage && !/^\d{4}/.test(e.stage) ? (STAGES[e.stage] || e.stage) : ''], foot: [e.venue] }),
+  },
+  nba: {
+    key: 'nbaTeams', label: 'NBA', what: '球隊',
+    // One request per season type (preseason, regular season, playoffs, play-in).
+    teamUrls: (id) => [1, 2, 3, 5].map(t => `${ESPN}/basketball/nba/teams/${id}/schedule?seasontype=${t}`),
+    eventFields: (e, c) => ({ id: 'n' + e.id, type: NBA_SEASON_TYPES[e.seasonType?.type] || 'regular', clock: c.status?.type?.shortDetail || '' }),
+    loadList: loadNbaList,
+    cardLabels: (e) => ({ comp: [NBA_TYPES[e.type]], foot: [e.venue] }),
+  },
+  tennis: {
+    key: 'tennisPlayers', label: '網球', what: '選手',
+    loadList: loadTennisList,
+    cardLabels: (e) => ({ comp: [e.tournament, TENNIS_ROUNDS[e.round] || e.round], foot: ['單打', e.venue] }),
+  },
 };
 const FOLLOW_KEYS = Object.values(FOLLOW).map(f => f.key);
+const TEAM_SOURCES = Object.keys(FOLLOW).filter(s => FOLLOW[s].teamUrls);
+const EVENT_SOURCES = [...Object.keys(FOLLOW), 'f1'];
+
+// Tabs of the filter pop-up, one per kind of sport (in this order). Each league names its data source;
+// a league with "divisions" gets a second dropdown, one without shows the league dropdown alone.
+// The key of a division, or of a league without divisions, is the "group" stored with a followed item.
+const leaguesOf = (source, names) => Object.fromEntries(Object.entries(names).map(([k, name]) => [k, { name, source }]));
+const SPORT_TABS = {
+  soccer: { label: '足球', what: '球隊', leagueWord: '聯賽', leagues: leaguesOf('soccer', PICKER_LEAGUES) },
+  basketball: { label: '籃球', what: '球隊', leagueWord: '聯盟', leagues: { nba: { name: 'NBA', source: 'nba', divisions: NBA_CONFS } } },
+  tennis: { label: '網球', what: '選手', leagueWord: '巡迴賽', ranked: true, leagues: leaguesOf('tennis', TENNIS_TOURS) },
+  f1: { label: 'F1' },
+};
+const PICK_TABS = Object.keys(SPORT_TABS).filter(t => SPORT_TABS[t].leagues);
+const tabLeagues = (tab) => Object.entries(SPORT_TABS[tab].leagues);
+const tabSources = (tab) => [...new Set(tabLeagues(tab).map(([, l]) => l.source))];
+// Groups of one league: its divisions, or the league itself.
+const leagueGroups = (key, league) => Object.keys(league.divisions || { [key]: league.name });
+// Every group of a tab as [source, group].
+const tabGroups = (tab) => tabLeagues(tab).flatMap(([k, l]) => leagueGroups(k, l).map(g => [l.source, g]));
+// Name of a group: GROUP_NAMES[source][group]. A division also names its league once a tab has several.
+const GROUP_NAMES = {};
+for (const tab of PICK_TABS) {
+  for (const [k, l] of tabLeagues(tab)) {
+    const names = GROUP_NAMES[l.source] ??= {};
+    for (const g of leagueGroups(k, l)) {
+      const own = l.divisions ? l.divisions[g] : l.name;
+      names[g] = l.divisions && tabLeagues(tab).length > 1 ? `${l.name} ${own}` : own;
+    }
+  }
+}
 
 // Standings sidebar: soccer competitions that have a table (domestic cups are knockouts — no table).
 const STANDINGS_SOCCER = { ...PICKER_LEAGUES, 'uefa.champions': '歐冠（聯賽階段）', 'uefa.europa': '歐霸（聯賽階段）', 'uefa.europa.conf': '歐協聯（聯賽階段）' };
@@ -513,528 +572,20 @@ const STANDINGS_SUB = {            // second-level switch per sport (soccer uses
 // Chinese names, used only by the picker search (ESPN gives English names only; the display stays English).
 // Tennis and NBA: Wikipedia zh-tw titles plus common Taiwan names. Soccer: common Taiwan names, hand-written.
 // Keyed by ESPN's English name. Teams or players missing here can still be found in English.
-const ZH_NAMES = {
-  "Manchester City": "曼城 曼徹斯特城",
-  "Arsenal": "阿森納 兵工廠",
-  "Brighton & Hove Albion": "布萊頓",
-  "Chelsea": "切爾西 車路士",
-  "Liverpool": "利物浦",
-  "Brentford": "布倫特福德 布倫福德",
-  "AFC Bournemouth": "伯恩茅斯 般尼茅斯",
-  "Tottenham Hotspur": "托特納姆熱刺 熱刺",
-  "Aston Villa": "阿斯頓維拉 維拉",
-  "Hull City": "赫爾城",
-  "Leeds United": "里茲聯 利茲聯",
-  "Newcastle United": "紐卡斯爾聯 紐卡索",
-  "Ipswich Town": "伊普斯維奇 葉士域治",
-  "Everton": "埃弗頓 艾佛頓",
-  "Fulham": "富勒姆",
-  "Coventry City": "考文垂",
-  "Manchester United": "曼聯 曼徹斯特聯",
-  "Crystal Palace": "水晶宮",
-  "Nottingham Forest": "諾丁漢森林",
-  "Sunderland": "桑德蘭",
-  "Barcelona": "巴塞隆納 巴薩 巴塞羅那",
-  "Atlético Madrid": "馬德里競技 馬競",
-  "Real Madrid": "皇家馬德里 皇馬",
-  "Real Betis": "皇家貝蒂斯 貝蒂斯",
-  "Real Sociedad": "皇家社會",
-  "Sevilla": "塞維利亞 塞維亞",
-  "Athletic Club": "畢爾包競技 畢爾巴鄂",
-  "Villarreal": "比利亞雷亞爾 黃色潛水艇",
-  "Celta Vigo": "維戈塞爾塔 塞爾塔",
-  "Alavés": "阿拉維斯",
-  "Rayo Vallecano": "巴列卡諾",
-  "Deportivo": "拉科魯尼亞",
-  "Espanyol": "西班牙人",
-  "Osasuna": "奧薩蘇納",
-  "Racing Santander": "桑坦德競技",
-  "Elche": "埃爾切",
-  "Levante": "萊萬特",
-  "Getafe": "赫塔費",
-  "Valencia": "瓦倫西亞",
-  "Málaga": "馬拉加",
-  "Bayern Munich": "拜仁慕尼黑 拜仁",
-  "Borussia Dortmund": "多特蒙德",
-  "SC Freiburg": "弗萊堡",
-  "RB Leipzig": "萊比錫",
-  "Werder Bremen": "不來梅",
-  "Bayer Leverkusen": "勒沃庫森 藥廠",
-  "SV Elversberg": "埃爾弗斯貝格",
-  "Mainz": "美因茲",
-  "FC Augsburg": "奧格斯堡",
-  "VfB Stuttgart": "斯圖加特",
-  "TSG Hoffenheim": "霍芬海姆",
-  "SC Paderborn 07": "帕德博恩",
-  "Hamburg SV": "漢堡",
-  "FC Cologne": "科隆",
-  "Eintracht Frankfurt": "法蘭克福",
-  "Schalke 04": "沙爾克04",
-  "1. FC Union Berlin": "柏林聯合",
-  "Borussia Mönchengladbach": "門興格拉德巴赫 門興",
-  "Lazio": "拉齊奧",
-  "Internazionale": "國際米蘭",
-  "AS Roma": "羅馬",
-  "Como": "科莫",
-  "AC Milan": "AC米蘭",
-  "Frosinone": "弗羅西諾內",
-  "Napoli": "那不勒斯 拿坡里",
-  "Juventus": "尤文圖斯 祖雲達斯",
-  "Bologna": "波隆那 博洛尼亞",
-  "Torino": "杜林 都靈",
-  "Cagliari": "卡利亞里",
-  "Atalanta": "亞特蘭大",
-  "Genoa": "熱那亞",
-  "Lecce": "萊切",
-  "Sassuolo": "薩索洛",
-  "Monza": "蒙扎",
-  "Fiorentina": "佛羅倫斯 費倫天拿",
-  "Parma": "帕爾瑪",
-  "Udinese": "烏迪內斯",
-  "Venezia": "威尼斯",
-  "Paris Saint-Germain": "巴黎聖日耳曼",
-  "Lille": "里爾",
-  "Stade Rennais": "雷恩",
-  "AS Monaco": "摩納哥",
-  "Lyon": "里昂",
-  "Paris FC": "巴黎FC",
-  "Nice": "尼斯",
-  "Lens": "朗斯",
-  "Marseille": "馬賽",
-  "Lorient": "洛里昂",
-  "Toulouse": "土魯斯 圖盧茲",
-  "AJ Auxerre": "歐塞爾",
-  "Brest": "布雷斯特",
-  "Angers": "昂熱",
-  "Troyes": "特魯瓦",
-  "Strasbourg": "史特拉斯堡",
-  "Le Mans": "勒芒",
-  "Le Havre AC": "勒阿弗爾",
-  "Feyenoord Rotterdam": "費耶諾德",
-  "Ajax Amsterdam": "阿賈克斯 阿積士",
-  "PSV Eindhoven": "埃因霍溫",
-  "FC Twente": "特溫特",
-  "AZ Alkmaar": "阿爾克馬爾",
-  "Fortuna Sittard": "福圖納錫塔德",
-  "Heerenveen": "海倫芬",
-  "FC Groningen": "格羅寧根",
-  "SC Cambuur": "坎布爾",
-  "Go Ahead Eagles": "前進之鷹",
-  "FC Utrecht": "烏特勒支",
-  "Excelsior": "精英",
-  "NEC Nijmegen": "奈梅亨",
-  "PEC Zwolle": "茲沃勒",
-  "Sparta Rotterdam": "鹿特丹斯巴達",
-  "Telstar": "特爾斯達",
-  "ADO Den Haag": "海牙",
-  "Willem II": "威廉二世",
-  "FC Porto": "波圖 波爾圖",
-  "Benfica": "本菲卡",
-  "Sporting CP": "葡萄牙體育 士砵亭",
-  "Santa Clara": "聖克拉拉",
-  "Arouca": "阿羅卡",
-  "Académico de Viseu": "維塞烏學術",
-  "Gil Vicente": "吉爾維森特",
-  "Moreirense": "莫雷拉人",
-  "Braga": "布拉加",
-  "Alverca": "阿爾維卡",
-  "FC Famalicao": "法馬利康",
-  "Estrela": "阿馬多拉星",
-  "Vitória de Guimaraes": "吉馬良斯",
-  "Maritimo": "馬里蒂莫",
-  "Rio Ave": "里奧阿維",
-  "C.D. Nacional": "國民",
-  "Casa Pia": "卡薩皮亞",
-  "Estoril": "埃斯托里爾",
-  "Celtic": "塞爾提克 凱爾特人",
-  "Rangers": "流浪者",
-  "Heart of Midlothian": "哈茨 心臟",
-  "Dundee": "鄧迪",
-  "Dundee United": "鄧迪聯",
-  "Falkirk": "福爾柯克",
-  "St Johnstone": "聖約翰斯通",
-  "St Mirren": "聖米倫",
-  "Motherwell": "馬瑟韋爾",
-  "Aberdeen": "亞伯丁",
-  "Kilmarnock": "基爾馬諾克",
-  "Hibernian": "希伯尼安",
-  "Chicago Fire FC": "芝加哥火焰",
-  "Columbus Crew": "哥倫布機員",
-  "New England Revolution": "新英格蘭革命",
-  "Red Bull New York": "紐約紅牛",
-  "D.C. United": "華盛頓聯 DC聯",
-  "Toronto FC": "多倫多",
-  "CF Montréal": "蒙特婁",
-  "Philadelphia Union": "費城聯合",
-  "Orlando City SC": "奧蘭多城",
-  "New York City FC": "紐約城",
-  "FC Cincinnati": "辛辛那提",
-  "Atlanta United FC": "亞特蘭大聯",
-  "Nashville SC": "納什維爾",
-  "Inter Miami CF": "邁阿密國際",
-  "Charlotte FC": "夏洛特",
-  "Colorado Rapids": "科羅拉多急流",
-  "FC Dallas": "達拉斯",
-  "Sporting Kansas City": "堪薩斯城體育",
-  "LA Galaxy": "洛杉磯銀河",
-  "San Jose Earthquakes": "聖荷西地震",
-  "Real Salt Lake": "皇家鹽湖城",
-  "Houston Dynamo FC": "休士頓迪納摩",
-  "Portland Timbers": "波特蘭伐木者",
-  "Seattle Sounders FC": "西雅圖海灣人",
-  "Vancouver Whitecaps": "溫哥華白帽",
-  "Minnesota United FC": "明尼蘇達聯",
-  "LAFC": "洛杉磯FC",
-  "Austin FC": "奧斯汀",
-  "St. Louis CITY SC": "聖路易城",
-  "San Diego FC": "聖地牙哥",
-  "Al Hilal": "利雅得新月 新月",
-  "Al Qadsiah": "卡迪西亞",
-  "Al Nassr": "利雅得勝利",
-  "Al Ittihad": "吉達聯合",
-  "Neom SC": "尼奧姆",
-  "Al Ahli": "吉達國民",
-  "Al Ettifaq": "達曼協作",
-  "Al Diriyah": "迪里耶",
-  "Al Khaleej": "海灣",
-  "Al Shabab": "利雅得青年",
-  "Al Kholood": "霍盧德",
-  "Al Riyadh": "利雅得",
-  "Al Fayha": "費哈",
-  "Al Hazem": "哈澤姆",
-  "Al Faisaly": "費薩利",
-  "Al Fateh": "法塔赫",
-  "Al Taawoun": "塔亞文",
-  "Abha": "艾卜哈",
-  "Brooklyn Nets": "布魯克林籃網",
-  "Chicago Bulls": "芝加哥公牛",
-  "Milwaukee Bucks": "密爾沃基雄鹿 公鹿",
-  "Miami Heat": "邁阿密熱火",
-  "New York Knicks": "紐約尼克斯 尼克",
-  "Indiana Pacers": "印第安納步行者 溜馬",
-  "Atlanta Hawks": "亞特蘭大老鷹",
-  "Charlotte Hornets": "夏洛特黃蜂",
-  "Orlando Magic": "奧蘭多魔術",
-  "Washington Wizards": "華盛頓奇才 巫師",
-  "Toronto Raptors": "多倫多猛龍 暴龍",
-  "Cleveland Cavaliers": "克里夫蘭騎士",
-  "Boston Celtics": "波士頓凱爾特人 塞爾提克",
-  "Detroit Pistons": "底特律活塞",
-  "Philadelphia 76ers": "費城76人 七六人",
-  "Sacramento Kings": "沙加緬度國王",
-  "Utah Jazz": "猶他爵士",
-  "LA Clippers": "洛杉磯快船 快艇",
-  "New Orleans Pelicans": "紐奧良鵜鶘",
-  "Phoenix Suns": "菲尼克斯太陽 鳳凰城",
-  "Golden State Warriors": "金州勇士",
-  "Denver Nuggets": "丹佛掘金 金塊",
-  "Minnesota Timberwolves": "明尼蘇達森林狼 灰狼",
-  "Los Angeles Lakers": "洛杉磯湖人",
-  "Oklahoma City Thunder": "俄克拉荷馬城雷霆 奧克拉荷馬",
-  "San Antonio Spurs": "聖安東尼奧馬刺 聖安東尼奧",
-  "Dallas Mavericks": "達拉斯獨行俠 小牛",
-  "Portland Trail Blazers": "波特蘭開拓者 拓荒者",
-  "Houston Rockets": "休斯敦火箭 休士頓",
-  "Memphis Grizzlies": "孟菲斯灰熊",
-  "Jannik Sinner": "揚尼克·辛納",
-  "Alexander Zverev": "亞歷山大·茲韋列夫",
-  "Carlos Alcaraz": "卡洛斯·阿爾卡拉斯 艾卡拉茲",
-  "Ben Shelton": "本·謝爾頓",
-  "Daniil Medvedev": "丹尼爾·梅德韋傑夫 梅德維夫",
-  "Flavio Cobolli": "弗拉維奧·科博利",
-  "Felix Auger-Aliassime": "費利克斯·奧熱-阿利亞西姆",
-  "Arthur Fils": "阿蒂爾·菲斯",
-  "Frances Tiafoe": "弗朗西斯·蒂亞福",
-  "Alex de Minaur": "亞歷克斯·德米納爾",
-  "Rafael Jodar": "拉斐爾·霍達爾",
-  "Novak Djokovic": "諾瓦克·喬科維奇 德約科維奇 喬帥",
-  "Taylor Fritz": "泰勒·弗里茨 佛里茲",
-  "Tommy Paul": "湯米·保羅",
-  "Alejandro Davidovich Fokina": "亞歷杭德羅·達維多維奇·福基納",
-  "Jakub Mensik": "雅各布·門希克",
-  "Brandon Nakashima": "布蘭登·中島",
-  "Learner Tien": "勒納·錢",
-  "Francisco Cerundolo": "弗朗西斯科·塞倫多洛",
-  "Alexander Bublik": "亞歷山大·布勃利克",
-  "Jiri Lehecka": "伊日·萊赫奇卡",
-  "Andrey Rublev": "安德烈·魯布列夫",
-  "Luciano Darderi": "盧恰諾·達爾德里",
-  "Karen Khachanov": "卡倫·哈查諾夫",
-  "Casper Ruud": "卡斯珀·魯德",
-  "Lorenzo Musetti": "洛倫佐·穆塞蒂",
-  "Alexander Blockx": "亞歷山大·布洛克什",
-  "Hubert Hurkacz": "胡貝特·胡爾卡奇",
-  "Tomas Martin Etcheverry": "托馬斯·馬丁·埃切韋里",
-  "Alejandro Tabilo": "亞歷杭德羅·塔維洛",
-  "Valentin Vacherot": "瓦朗坦·瓦舍羅",
-  "Ignacio Buse": "伊格納西奧·布塞",
-  "Stefanos Tsitsipas": "斯特凡諾斯·西西帕斯 齊齊帕斯",
-  "Alex Michelsen": "亞歷克斯·米切爾森",
-  "Arthur Fery": "阿蒂爾·費里",
-  "Matteo Arnaldi": "馬泰奧·阿納爾迪",
-  "Botic Van De Zandschulp": "博蒂克·范德贊德舒爾普",
-  "Ugo Humbert": "於戈·安貝爾",
-  "Zizou Bergs": "齊祖·貝格斯",
-  "Joao Fonseca": "若昂·豐塞卡",
-  "Cameron Norrie": "卡梅倫·諾里",
-  "Daniel Merida": "丹尼爾·梅里達",
-  "Mariano Navone": "馬里亞諾·納沃內",
-  "Arthur Gea": "阿蒂爾·熱亞",
-  "Quentin Halys": "康坦·阿利斯",
-  "Luca Van Assche": "呂卡·范阿舍",
-  "Jan-Lennard Struff": "楊-萊納德·史卓夫",
-  "Matteo Berrettini": "馬泰奧·貝雷蒂尼",
-  "Sebastian Baez": "塞瓦斯蒂安·巴埃斯",
-  "Tallon Griekspoor": "塔隆·格里克斯波爾",
-  "Thiago Agustin Tirante": "蒂亞戈·阿古斯丁·蒂蘭特",
-  "Denis Shapovalov": "丹尼斯·沙波瓦洛夫",
-  "Nuno Borges": "努諾·博爾赫斯",
-  "Juan Manuel Cerundolo": "胡安·曼努埃爾·塞倫多洛",
-  "Raphael Collignon": "拉斐爾·科利尼翁",
-  "Adolfo Daniel Vallejo": "丹尼爾·巴列霍",
-  "Jaime Faria": "雅伊梅·法里亞",
-  "Miomir Kecmanovic": "米奧米爾·凱茨曼諾維奇",
-  "Yannick Hanfmann": "揚尼克·漢夫曼",
-  "Daniel Altmaier": "丹尼爾·奧特邁爾",
-  "Arthur Rinderknech": "阿蒂爾·林德克內希",
-  "Ethan Quinn": "伊桑·奎因",
-  "Fabian Marozsan": "毛羅然·法比安",
-  "Vit Kopriva": "維特·科普日瓦",
-  "Jaume Munar": "豪梅·穆納爾",
-  "Mattia Bellucci": "馬蒂亞·貝盧奇",
-  "Martin Landaluce": "馬丁·蘭達盧塞",
-  "James Duckworth": "詹姆斯·達克沃思",
-  "Roman Safiullin": "羅曼·薩菲烏林",
-  "Facundo Diaz Acosta": "法昆多·迪亞斯·阿科斯塔",
-  "Tomas Machac": "托馬什·馬哈奇",
-  "Titouan Droguet": "蒂圖安·德羅蓋",
-  "Adrian Mannarino": "阿德里安·曼納里諾",
-  "Pablo Carreno Busta": "巴勃羅·卡雷尼奧·布斯塔",
-  "Camilo Ugo Carabelli": "卡米洛·烏戈·卡拉貝利",
-  "Zachary Svajda": "扎卡里·什瓦伊達",
-  "Roman Andres Burruchaga": "羅曼·安德烈斯·布魯查加",
-  "Hamad Medjedovic": "哈馬德·梅傑多維奇",
-  "Kyrian Jacquet": "基利安·雅凱",
-  "Alex Molcan": "亞歷克斯·莫爾坎",
-  "Sebastian Korda": "塞巴斯蒂安·科達",
-  "Kamil Majchrzak": "卡米爾·邁赫扎克",
-  "Damir Dzumhur": "達米爾·德祖赫",
-  "Aleksandar Kovacevic": "亞歷山大·科瓦塞維奇",
-  "Rinky Hijikata": "土方凜輝",
-  "Jacob Fearnley": "雅各布·費恩利",
-  "Chak Lam Coleman Wong": "黃澤林",
-  "Marcos Giron": "馬科斯·吉隆",
-  "Marco Trungelliti": "馬爾科·圖盧傑利蒂",
-  "Terence Atmane": "特倫斯·阿特馬納",
-  "Lorenzo Sonego": "洛倫佐·索內戈",
-  "Bu Yunchaokete": "布雲朝克特",
-  "Dino Prizmic": "迪諾·普里茲米奇",
-  "Jenson Brooksby": "詹森·布魯克斯比",
-  "Nikoloz Basilashvili": "尼科洛茲·巴西拉什維利",
-  "Marin Cilic": "馬林·契利奇",
-  "Toby Samuel": "托比·塞繆爾",
-  "Adam Walton": "亞當·沃爾頓",
-  "Benjamin Bonzi": "邦雅曼·邦齊",
-  "Henrique Rocha": "恩里克·羅沙",
-  "Michael Zheng": "鄭瑞",
-  "Jesper de Jong": "耶斯珀·德容",
-  "Corentin Moutet": "科朗坦·穆泰",
-  "Zsombor Piros": "皮羅什·容博爾",
-  "Martin Damm": "馬丁·達姆",
-  "Sho Shimabukuro": "島袋將",
-  "Wu Yibing": "吳易昺",
-  "Lloyd Harris": "勞埃德·哈里斯",
-  "Hugo Gaston": "雨果·加斯頓",
-  "Thiago Seyboth Wild": "蒂亞戈·賽博特·維爾德",
-  "Dane Sweeny": "戴恩·斯威尼",
-  "Gustavo Heide": "古斯塔沃·海德",
-  "Jan Choinski": "揚·霍因斯基",
-  "Nicolas Mejia": "尼古拉斯·梅希亞",
-  "Aleksandar Vukic": "亞歷山大·武基奇",
-  "Valentin Royer": "瓦朗坦·魯瓦耶",
-  "Christopher O'Connell": "克里斯多福·奧康奈爾",
-  "Hugo Dellien": "烏戈·德里恩",
-  "Dalibor Svrcina": "達利博爾·斯夫爾奇納",
-  "Otto Virtanen": "奧托·維爾塔寧",
-  "Sebastian Ofner": "塞巴斯蒂安·歐弗納",
-  "Emilio Nava": "埃米利奧·納瓦",
-  "Grigor Dimitrov": "格里戈爾·迪米特洛夫",
-  "Rei Sakamoto": "坂本憐",
-  "Pedro Martinez": "佩卓·馬丁尼茲",
-  "Alexei Popyrin": "阿列克謝·波佩林",
-  "Francisco Comesana": "弗朗西斯科·科梅薩尼亞",
-  "Shintaro Mochizuki": "望月慎太郎",
-  "Alexandre Muller": "亞歷山大·穆勒",
-  "Nishesh Basavareddy": "尼謝什·巴薩瓦雷迪",
-  "Stefanos Sakellaridis": "斯特凡諾斯·薩克拉里迪斯",
-  "Clement Chidekh": "克萊芒·希德克",
-  "Borna Gojo": "博爾納·戈約",
-  "Laslo Djere": "拉斯洛·捷雷",
-  "Jurij Rodionov": "尤里·羅季奧諾夫",
-  "Andrea Pellegrino": "安德烈亞·佩萊格里諾",
-  "Pablo Llamas Ruiz": "巴勃羅·利亞馬斯·魯伊斯",
-  "Tristan Schoolkate": "特里斯坦·斯庫爾凱特",
-  "Federico Cina": "費代里科·奇納",
-  "Marton Fucsovics": "富喬維奇·馬頓",
-  "Darwin Blanch": "達爾文·布蘭奇",
-  "Vilius Gaubas": "維柳斯·高巴斯",
-  "Ilia Simakin": "伊利亞·西馬金",
-  "Michael Mmoh": "邁克爾·莫阿",
-  "Giovanni Mpetshi Perricard": "喬瓦尼·姆佩奇·佩里卡爾",
-  "Gabriel Diallo": "加布里埃爾·迪亞洛",
-  "Elmer Moller": "埃爾默·默勒",
-  "Elena Rybakina": "葉連娜·萊巴金娜 萊巴基納",
-  "Aryna Sabalenka": "阿里娜·薩巴倫卡 莎芭蓮卡",
-  "Mirra Andreeva": "米拉·安德烈耶娃",
-  "Jessica Pegula": "潔西卡·佩古拉 佩古拉",
-  "Coco Gauff": "科科·高夫 高芙",
-  "Elina Svitolina": "伊莉娜·斯維托莉娜",
-  "Karolina Muchova": "卡羅利娜·穆霍娃",
-  "Iga Swiatek": "伊加·斯威雅蒂 史威雅蒂",
-  "Linda Noskova": "琳達·諾斯科娃",
-  "Marta Kostyuk": "瑪莎·柯絲堤雅克",
-  "Maja Chwalinska": "瑪雅·赫瓦林斯卡",
-  "Iva Jovic": "伊娃·約維奇",
-  "Diana Shnaider": "季阿娜·施耐德",
-  "Elise Mertens": "愛麗絲·梅丹斯",
-  "Victoria Mboko": "維多利亞·姆博科",
-  "Sorana Cirstea": "索拉娜·科斯蒂亞",
-  "Amanda Anisimova": "阿曼達·阿尼西莫娃",
-  "Naomi Osaka": "大坂直美",
-  "Alexandra Eala": "亞歷克莎·埃亞拉",
-  "Belinda Bencic": "貝琳達·本契奇",
-  "Madison Keys": "麥迪遜·基絲",
-  "Zheng Qinwen": "鄭欽文",
-  "Leylah Fernandez": "萊拉·費爾南德斯",
-  "Marie Bouzkova": "瑪麗·鮑茲科娃",
-  "Anna Kalinskaya": "安娜·卡林斯卡婭",
-  "Jelena Ostapenko": "葉蓮娜·奧斯塔朋科",
-  "Anastasia Potapova": "安娜斯塔西亞·波塔波娃",
-  "Emma Navarro": "艾瑪·納瓦羅",
-  "Nikola Bartunkova": "尼古拉·巴爾通科娃",
-  "Maria Sakkari": "瑪麗亞·莎卡瑞",
-  "Sara Bejlek": "薩拉·貝萊克",
-  "Ekaterina Alexandrova": "葉卡捷琳娜·亞歷山德羅娃",
-  "Diane Parry": "迪亞娜·帕里",
-  "Jasmine Paolini": "賈斯明·保利尼",
-  "Donna Vekic": "唐娜·維基奇",
-  "Peyton Stearns": "佩頓·斯特恩斯",
-  "Talia Gibson": "塔莉婭·吉布森",
-  "Wang Xinyu": "王欣瑜",
-  "Daria Snigur": "達里婭·斯尼古爾",
-  "Kimberly Birrell": "金伯莉·比勒爾",
-  "Cristina Bucsa": "克里斯蒂娜·布克沙",
-  "Liudmila Samsonova": "柳德米拉·薩姆索諾娃",
-  "Ashlyn Krueger": "阿什琳·克魯格",
-  "Hailey Baptiste": "黑莉·巴普蒂斯特",
-  "Barbora Krejcikova": "巴爾博拉·克賴奇科娃",
-  "Janice Tjen": "曾麗美",
-  "Katie Boulter": "凱蒂·博爾特",
-  "Katerina Siniakova": "卡特日娜·西尼亞科娃",
-  "Magdalena Frech": "瑪格達萊娜·弗雷赫",
-  "Karolina Pliskova": "卡羅利娜·普利斯科娃",
-  "Sonay Kartal": "索納伊·卡達",
-  "Lilli Tagger": "莉莉·塔格爾",
-  "Yuliia Starodubtseva": "尤利婭·斯塔羅杜布采娃",
-  "Anhelina Kalinina": "安赫林娜·加里寧娜",
-  "Mayar Sherif": "瑪雅·謝里夫",
-  "Lanlana Tararudee": "蘭叻那·達拉魯迪",
-  "Clara Tauson": "克拉拉·陶森",
-  "Tamara Korpatsch": "塔瑪拉·科爾帕奇",
-  "Elena-Gabriela Ruse": "埃列娜-加布麗埃拉·魯塞",
-  "Paula Badosa": "葆拉·巴多薩",
-  "Oleksandra Oliynykova": "奧列克桑德拉·奧利伊尼科娃",
-  "Catherine McNally": "凱蒂·麥克納利",
-  "Zeynep Sonmez": "澤伊內普·森梅茲",
-  "Alycia Parks": "阿莉西婭·帕克斯",
-  "Kamilla Rakhimova": "卡米拉·拉希莫娃",
-  "Yulia Putintseva": "尤利婭·普汀塞娃",
-  "Camila Osorio": "卡米拉·奧索里奧",
-  "Elisabetta Cocciaretto": "伊莉莎白·科恰雷托",
-  "Tatjana Maria": "塔季揚娜·瑪麗亞",
-  "Magda Linette": "瑪格達·蕾妮特",
-  "Maria Timofeeva": "瑪麗亞·季莫費耶娃",
-  "Anna Blinkova": "安娜·布林科娃",
-  "Viktorija Golubic": "維多莉亞·格魯比奇",
-  "Daria Kasatkina": "達里婭·卡薩特金娜",
-  "Anna Bondar": "邦達爾·安娜",
-  "Sinja Kraus": "辛婭·克勞斯",
-  "Panna Udvardy": "烏德沃爾迪·蓬瑙",
-  "Alina Korneeva": "阿林娜·科爾涅耶娃",
-  "Mananchaya Sawangkaew": "瑪南猜亞·薩王凱",
-  "Katie Volynets": "凱蒂·沃利內茨",
-  "Wang Xiyu": "王曦雨",
-  "Jaqueline Cristian": "傑奎琳·克里斯蒂安",
-  "Antonia Ruzic": "安東尼婭·魯日奇",
-  "Taylah Preston": "泰拉·普雷斯頓",
-  "Kaitlin Quevedo": "凱特琳·克韋多",
-  "Tereza Valentova": "泰雷扎·瓦倫托娃",
-  "Petra Marcinko": "彼得拉·馬爾欽科",
-  "Taylor Townsend": "泰勒·湯森",
-  "Leolia Jeanjean": "里奧利亞·讓讓",
-  "Polina Kudermetova": "波利娜·庫德梅托娃",
-  "Darja Vidmanova": "達爾婭·維德曼諾娃",
-  "Zhang Shuai": "張帥",
-  "Maya Joint": "馬婭·茹安",
-  "Renata Zarazua": "雷娜塔·薩拉蘇亞",
-  "Jessica Bouzas Maneiro": "傑茜卡·博薩斯·馬內羅",
-  "Dayana Yastremska": "達雅娜·雅斯特雷姆斯卡",
-  "Francesca Jones": "弗朗西斯卡·瓊斯",
-  "Fiona Ferro": "菲奧娜·費羅",
-  "Alina Charaeva": "阿林娜·恰拉耶娃",
-  "Solana Sierra": "索拉納·謝拉",
-  "Lisa Pigato": "莉薩·皮加托",
-  "Hanne Vandewinkel": "阿娜·范德溫克爾",
-  "Emma Raducanu": "艾瑪·拉杜卡努",
-  "Anastasia Zakharova": "阿納斯塔西婭·扎哈羅娃",
-  "Katarzyna Kawa": "卡塔日娜·卡瓦",
-  "Kristina Liutova": "克里斯季娜·柳托娃",
-  "Dominika Salkova": "多米妮卡·沙爾科娃",
-  "Claire Liu": "劉婧文",
-  "McCartney Kessler": "麥卡特尼·凱斯勒",
-  "Elvina Kalieva": "埃爾維娜·卡利耶娃",
-  "Aliaksandra Sasnovich": "阿莉婭克桑德拉·薩斯諾維奇",
-  "Mary Stoiana": "瑪麗·斯托亞納",
-  "Himeno Sakatsume": "坂詰姬野",
-  "Harriet Dart": "哈麗雅特·達特",
-  "Laura Samson": "勞拉·薩姆松",
-  "Sloane Stephens": "斯隆·史蒂芬斯",
-  "Lucrezia Stefanini": "盧克雷齊婭·斯特凡尼尼",
-  "Kayla Day": "凱拉·戴",
-  "Oksana Selekhmeteva": "奧克薩娜·謝列赫梅捷娃",
-  "Moyuka Uchijima": "內島萌夏",
-  "Julia Grabher": "尤利婭·格拉伯赫爾",
-  "Tatiana Prozorova": "塔季揚娜·普羅佐羅娃",
-  "Jeline Vandromme": "耶琳·凡德羅梅",
-  "Marina Bassols Ribera": "瑪麗娜·巴索爾斯·里韋拉",
-  "Noma Noha Akugue": "諾瑪·諾哈·阿庫格",
-  "Emerson Jones": "埃默生·瓊斯",
-  "Simona Waltert": "西蒙娜·瓦爾特特",
-  "Bianca Andreescu": "比安卡·安德烈斯庫",
-  "Maddison Inglis": "麥迪遜·英格利斯",
-  "Leyre Romero Gormaz": "萊爾·羅梅羅·戈爾馬斯",
-  "Lucia Bronzetti": "露西婭·布龍澤蒂",
-  "Ajla Tomljanovic": "阿伊拉·托姆利亞諾維奇",
-  "Elsa Jacquemot": "埃爾莎·雅克莫",
-  "Veronika Podrez": "韋羅妮卡·波德列茲",
-  "Andrea Lazaro Garcia": "安德烈婭·拉薩羅·加西亞",
-  "Guiomar Maristany Zuleta De Reales": "吉奧馬爾·馬里斯塔尼",
-  "Elizara Yaneva": "葉利扎拉·亞涅娃",
-  "Julia Riera": "胡利婭·列拉",
-  "Tamara Zidansek": "塔瑪拉·澤丹塞克",
-  "Rebecca Sramkova": "麗貝卡·什拉姆科娃",
-  "Teodora Kostovic": "特奧多拉·科斯托維奇",
-  "Mia Pohankova": "米婭·波漢科娃",
-  "Elina Avanesyan": "葉林娜·阿瓦涅相",
-  "Storm Hunter": "斯托姆·杭特",
-  "Polina Iatcenko": "波利娜·齊婭琴科",
-  "Martyna Kubka": "瑪蒂娜·庫布卡",
-  "Susan Bandecchi": "蘇珊·班代基",
-  "Robin Montgomery": "羅賓·蒙哥馬利",
-};
+const ZH_NAMES = {};
+const zhFiles = {};   // source -> promise of its zh-<source>.js, loaded the first time a search opens
+function loadZhNames(source) {
+  return zhFiles[source] ??= new Promise((done) => {
+    const el = document.createElement('script');
+    el.src = `zh-${source}.js`;
+    el.onload = done;
+    el.onerror = () => { delete zhFiles[source]; done(); };   // English search still works; the next search retries
+    document.head.append(el);
+  });
+}
 
 // Emoji shown before the sport name on each match card.
-const SPORT_EMOJI = { '足球': '⚽', 'NBA': '🏀', '網球': '🎾', 'F1': '🏎️' };
+const SPORT_EMOJI = { '足球': '⚽', '籃球': '🏀', 'NBA': '🏀', '網球': '🎾', 'F1': '🏎️' };
 // Outline funnel icon for the filter button and dialog title (uses the current text color).
 const FILTER_ICON = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6.2 7.6V19l-3.6-1.8v-4.6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
 const SEARCH_ICON = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 16l4.5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
@@ -1046,6 +597,16 @@ const TW_OFFSET_MS = 8 * 3600 * 1000;
 const DAY_MS = 24 * 3600 * 1000;
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
 const STORE_KEY = 'matchSchedule.v2';
+const EVENTS_KEY = 'matchSchedule.events.';     // + source: cached schedule of one sport
+const STANDINGS_KEY = 'matchSchedule.standings';
+// How long fetched data counts as fresh. "↻ 更新" always fetches.
+const FRESH_MS = 15 * 60 * 1000;          // teams with a match in the next FRESH_AHEAD_MS, and tennis
+const FRESH_AHEAD_MS = 14 * 24 * 3600 * 1000;
+const FRESH_IDLE_MS = 24 * 3600 * 1000;   // teams with nothing coming up, and the F1 calendar
+const JUST_ENDED_MS = 4 * 3600 * 1000;    // a match that started this recently may have just finished
+const FRESH_STANDINGS_MS = 3600 * 1000;
+const KEEP_PAST_MS = 30 * 24 * 3600 * 1000;   // finished matches kept in storage
+const MAX_PARALLEL_TEAMS = 6;
 const ESPN = 'https://site.api.espn.com/apis/site/v2/sports';
 const ESPN_STANDINGS = 'https://site.api.espn.com/apis/v2/sports';
 
@@ -1108,11 +669,60 @@ function compType(slug) {
 }
 
 // localStorage may be unavailable (private mode etc.) — never let it break the page.
+// Settings and each sport's schedule are stored under separate keys, so a full schedule can never block the settings.
 function loadStore() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; }
 }
 function saveStore(patch) {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...loadStore(), ...patch })); } catch {}
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...loadStore(), ...patch })); }
+  catch { state.settingsUnsaved = true; }
+}
+
+// Cached schedule of one sport: { at, from, to, events }.
+//   at:       when each item was last fetched (team id, 'all' for tennis, year for F1)
+//   from, to: the period the cache is complete for (to = null means open-ended)
+function loadEvents(source) {
+  try {
+    const c = JSON.parse(localStorage.getItem(EVENTS_KEY + source));
+    if (c) return { at: c.at || {}, cover: { from: c.from, to: c.to ?? Infinity }, events: c.events || [] };
+  } catch {}
+  return { at: {}, cover: null, events: [] };
+}
+
+// Store a sport's schedule, keeping less when the browser's storage is full.
+// Older matches and far-away dates are fetched again when someone asks for them.
+function saveEvents(source) {
+  const now = Date.now();
+  const cfg = FOLLOW[source];
+  const kept = cfg ? state[source].filter(e => follows(cfg.key, e.home.id) || follows(cfg.key, e.away.id)) : state[source];
+  const base = coverBase(source);
+  const attempts = [
+    [source === 'f1' ? 0 : now - KEEP_PAST_MS, Infinity],
+    [now - 7 * DAY_MS, Infinity],
+    [now - 7 * DAY_MS, now + 30 * DAY_MS],
+  ];
+  for (const [a, b] of attempts) {
+    const from = Math.max(a, base.from), to = Math.min(b, base.to);
+    const events = kept.filter(e => e.start >= from && e.start < to);
+    try {
+      localStorage.setItem(EVENTS_KEY + source, JSON.stringify({ at: state.fetchAt[source], from, to, events }));
+      state.cover[source] = { from, to };
+      state.eventsUnsaved.delete(source);
+      return;
+    } catch {}
+  }
+  try { localStorage.removeItem(EVENTS_KEY + source); } catch {}
+  state.eventsUnsaved.add(source);
+}
+
+// The period the data in memory can be trusted for when it is stored again.
+function coverBase(source) {
+  const open = { from: 0, to: Infinity };
+  const c = state.cover[source];
+  const cfg = FOLLOW[source];
+  // Tennis is fetched by date, so nothing is known until a period has been fetched.
+  if (!c) return cfg && !cfg.teamUrls ? { from: 0, to: 0 } : open;
+  return cfg?.teamUrls && state[cfg.key].every(t => state.fullIds.has(t.id)) ? open : c;
 }
 
 // Merge new events into a list by id (an event shared by two followed teams is kept once).
@@ -1126,7 +736,7 @@ function mergeById(base, events) {
 // State
 // =====================================================================
 const DEFAULT_FILTERS = {
-  f1On: true,
+  f1On: false,
   f1Cats: Object.keys(F1_CATEGORIES),
   winStart: WINDOW_START_MIN,
   winEnd: WINDOW_END_MIN,
@@ -1138,28 +748,43 @@ const cleanFollowList = (list) => (Array.isArray(list) ? list : [])
   .map(t => ({ id: t.id, name: LEGACY_NAMES[t.id] || t.name, group: String(t.group || t.league || ''), logo: String(t.logo || '') }));
 
 const stored = loadStore();
+const cachedEvents = Object.fromEntries(EVENT_SOURCES.map(s => [s, loadEvents(s)]));
+// Older versions kept the schedules inside the settings; used once below, then moved out.
+const legacyEvents = EVENT_SOURCES.filter(s => Array.isArray(stored[s]));
+
+// Remembered dropdown choices of one tab; anything no longer offered falls back to the first option.
+function initialPick(tab, league, division) {
+  const leagues = SPORT_TABS[tab].leagues;
+  const key = leagues[league] ? league : Object.keys(leagues)[0];
+  const divisions = Object.keys(leagues[key].divisions || {});
+  return { league: key, division: divisions.includes(division) ? division : (divisions[0] || null) };
+}
+
 const state = {
   // Date range shown as tabs (Taiwan-midnight timestamps, end day inclusive). Defaults to this week.
   rangeStart: weekStartOf(Date.now()),
   rangeEnd: weekStartOf(Date.now()) + 6 * DAY_MS,
   selectedDay: dayStartOf(Date.now()),
-  f1Years: new Set(),                         // F1 seasons already fetched this session
-  tennisCovered: null,                        // {from, to} range the tennis data was fetched for
   sportTab: 'soccer',                         // sport tab shown in the filter pop-up
   // Followed teams / players
-  tracked: cleanFollowList(stored.tracked),             // soccer teams
-  nbaTeams: cleanFollowList(stored.nbaTeams),
-  tennisPlayers: cleanFollowList(stored.tennisPlayers),
-  // Normalized events per sport
-  soccer: stored.soccer || [],
-  nba: stored.nba || [],
-  tennis: stored.tennis || [],
-  f1: stored.f1 || [],
+  ...Object.fromEntries(FOLLOW_KEYS.map(k => [k, cleanFollowList(stored[k])])),
+  // Normalized events per source
+  ...Object.fromEntries(EVENT_SOURCES.map(s => [s, legacyEvents.includes(s) ? stored[s] : cachedEvents[s].events])),
+  fetchAt: Object.fromEntries(EVENT_SOURCES.map(s => [s, cachedEvents[s].at])),
+  cover: Object.fromEntries(EVENT_SOURCES.map(s => [s, cachedEvents[s].cover])),
+  fullIds: new Set(),                         // teams fetched since opening, so not limited to what storage kept
   fetchedAt: stored.fetchedAt || null,
+  loading: false,
   errors: [],
-  // Picker: selected first-level group per sport, and loaded lists: pickLists[sport][group] = [...]
-  pickGroup: { soccer: stored.pickerLeague || 'eng.1', nba: 'east', tennis: 'atp', ...(stored.pickGroup || {}) },
-  pickLists: { soccer: {}, nba: {}, tennis: {} },
+  eventsUnsaved: new Set(),                   // sports that did not fit in the browser's storage
+  settingsUnsaved: false,
+  // Picker: dropdown choices per tab, and loaded lists: pickLists[source][group] = [...]
+  pick: {
+    soccer: initialPick('soccer', stored.pick?.soccer?.league ?? stored.pickGroup?.soccer ?? stored.pickerLeague),
+    basketball: initialPick('basketball', stored.pick?.basketball?.league, stored.pick?.basketball?.division ?? stored.pickGroup?.nba),
+    tennis: initialPick('tennis', stored.pick?.tennis?.league ?? stored.pickGroup?.tennis),
+  },
+  pickLists: Object.fromEntries(Object.keys(FOLLOW).map(s => [s, {}])),
   filters: { ...DEFAULT_FILTERS, ...(stored.filters || {}) },
 };
 // "showLate" was removed (the kickoff window replaces it); snap old free-form times to 30-minute steps.
@@ -1168,6 +793,13 @@ state.filters.winStart = snapWin(state.filters.winStart);
 state.filters.winEnd = snapWin(state.filters.winEnd);
 const follows = (key, id, src = state) => src[key].some(t => t.id === id);
 const followCount = (src = state) => FOLLOW_KEYS.reduce((n, k) => n + src[k].length, 0);
+
+if (legacyEvents.length) {
+  const settings = { ...stored };
+  for (const s of legacyEvents) delete settings[s];
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch {}
+  legacyEvents.forEach(saveEvents);
+}
 
 // =====================================================================
 // Data fetching
@@ -1178,17 +810,21 @@ async function getJSON(url) {
   return res.json();
 }
 
-// Full schedule of one followed team (soccer or NBA).
-//   Soccer: ESPN's "all" path returns every competition; without "fixture=true" it gives
-//           played matches, with it, upcoming ones.
-//   NBA:    one request per season type (preseason, regular season, playoffs, play-in).
-async function fetchTeamSchedule(sport, team) {
-  const urls = sport === 'soccer'
-    ? [`${ESPN}/soccer/all/teams/${team.id}/schedule`, `${ESPN}/soccer/all/teams/${team.id}/schedule?fixture=true`]
-    : [1, 2, 3, 5].map(t => `${ESPN}/basketball/nba/teams/${team.id}/schedule?seasontype=${t}`);
-  const results = await Promise.allSettled(urls.map(getJSON));
+// Runs tasks with at most `limit` of them in flight, so a long follow list fills in steadily.
+async function runLimited(tasks, limit) {
+  let next = 0;
+  const worker = async () => { while (next < tasks.length) await tasks[next++](); };
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+}
+
+// Full schedule of one followed team. `complete` is false when only some of its requests worked.
+async function fetchTeamSchedule(source, team) {
+  const results = await Promise.allSettled(FOLLOW[source].teamUrls(team.id).map(getJSON));
   if (results.every(r => r.status !== 'fulfilled')) throw new Error(team.name);
-  return results.flatMap(r => r.status === 'fulfilled' ? (r.value.events || []) : []).map(e => normalizeTeamGame(e, sport));
+  return {
+    list: results.flatMap(r => r.status === 'fulfilled' ? (r.value.events || []) : []).map(e => normalizeTeamGame(e, source)),
+    complete: results.every(r => r.status === 'fulfilled'),
+  };
 }
 
 // Soccer and NBA games share ESPN's event format.
@@ -1205,7 +841,7 @@ function normalizeTeamGame(e, sport) {
     };
   };
   const st = c.status?.type || {};
-  const base = {
+  return {
     start: Date.parse(e.date),
     timeValid: e.timeValid !== false,
     home: side('home'),
@@ -1214,15 +850,9 @@ function normalizeTeamGame(e, sport) {
     statusName: st.name || '',
     statusText: st.shortDetail || st.description || '',
     venue: c.venue?.fullName || '',
+    kind: sport,
+    ...FOLLOW[sport].eventFields(e, c),
   };
-  if (sport === 'nba') {
-    return { ...base, id: 'n' + e.id, kind: 'nba', type: NBA_SEASON_TYPES[e.seasonType?.type] || 'regular',
-      clock: st.shortDetail || '' };
-  }
-  const slug = e.league?.slug || '';
-  return { ...base, id: 's' + e.id, kind: 'soccer', comp: slug,
-    compName: COMP_NAMES[slug] || e.league?.name || slug, type: compType(slug),
-    stage: e.seasonType?.name || '', clock: c.status?.displayClock || '' };
 }
 
 // Tennis: one scoreboard request per tour for the whole date range; it lists every tournament
@@ -1320,94 +950,146 @@ async function fetchF1(years) {
   return { list: out, failed };
 }
 
-async function refresh() {
+// A match in progress, or one that may have just finished or changed: its data can't count as fresh.
+const hasOpenMatch = (events, now) => events.some(e => e.state === 'in' ||
+  (e.start <= now && (e.start > now - JUST_ENDED_MS || (e.state === 'pre' && e.start > now - DAY_MS))));
+// The chosen dates reach outside what the stored data covers.
+function rangeOutsideCover(source) {
+  const c = state.cover[source];
+  return !c || state.rangeStart < c.from || state.rangeEnd + DAY_MS > c.to;
+}
+const teamEvents = (source, id) => state[source].filter(e => e.home.id === id || e.away.id === id);
+
+function teamIsStale(source, team, now) {
+  const at = state.fetchAt[source][team.id];
+  if (!at || (!state.fullIds.has(team.id) && rangeOutsideCover(source))) return true;
+  const events = teamEvents(source, team.id);
+  if (hasOpenMatch(events, now)) return true;
+  const soon = events.some(e => e.start > now && e.start <= now + FRESH_AHEAD_MS);
+  return now - at >= (soon ? FRESH_MS : FRESH_IDLE_MS);
+}
+
+function tennisIsStale(now) {
+  const at = state.fetchAt.tennis.all;
+  return !at || rangeOutsideCover('tennis') || hasOpenMatch(state.tennis, now) || now - at >= FRESH_MS;
+}
+
+const f1YearIsStale = (y, now) => !state.fetchAt.f1[y] || rangeOutsideCover('f1') || now - state.fetchAt.f1[y] >= FRESH_IDLE_MS;
+
+async function updateTeam(source, team) {
+  const { list, complete } = await fetchTeamSchedule(source, team);
+  // A team's new list replaces its old one, so cancelled fixtures disappear. Without all of it, only add.
+  const base = complete ? state[source].filter(e => e.home.id !== team.id && e.away.id !== team.id) : state[source];
+  state[source] = mergeById(base, list);
+  state.fetchAt[source][team.id] = Date.now();
+  state.fullIds.add(team.id);
+}
+
+async function updateTennis() {
+  const from = state.rangeStart, to = state.rangeEnd + DAY_MS;
+  const tn = await fetchTennis(state.tennisPlayers, from, to);
+  state.errors.push(...tn.failed);
+  if (tn.allFailed) return false;
+  // With one tour failed, keep what is known about it instead of replacing the period.
+  const base = tn.failed.length ? state.tennis : state.tennis.filter(e => e.start < from || e.start >= to);
+  state.tennis = mergeById(base, tn.list);
+  const c = state.cover.tennis;
+  state.cover.tennis = c && c.from <= to && c.to >= from ? { from: Math.min(c.from, from), to: Math.max(c.to, to) } : { from, to };
+  if (!tn.failed.length) state.fetchAt.tennis.all = Date.now();
+  return true;
+}
+
+async function updateF1(years) {
+  const f = await fetchF1(years);
+  state.errors.push(...f.failed);
+  const done = years.filter(y => !f.failed.includes(`F1 ${y} 賽程`));
+  if (!done.length) return false;
+  state.f1 = [...state.f1.filter(x => !done.includes(tw(x.start).getUTCFullYear())), ...f.list];
+  done.forEach(y => { state.fetchAt.f1[y] = Date.now(); });
+  return true;
+}
+
+// Show results as they arrive, without redrawing for every single team.
+let renderTimer = null;
+function renderSoon() {
+  renderTimer ??= setTimeout(() => { renderTimer = null; render(); }, 200);
+}
+
+// Fetch what is out of date; `force` ("↻ 更新") fetches everything.
+// Each sport shows up on its own, and one that fails does not hold back the others.
+let refreshAgain = false;
+async function refresh(force = false) {
+  if (state.loading) { refreshAgain = true; return; }
+  const now = Date.now();
+  if (force) clearStandings();
+  const teamJobs = TEAM_SOURCES.flatMap(s => state[FOLLOW[s].key]
+    .filter(t => force || teamIsStale(s, t, now)).map(t => [s, t]));
+  const tennisDue = state.tennisPlayers.length > 0 && (force || tennisIsStale(now));
+  // F1: every season touched by the chosen range and the next two months.
+  const years = state.filters.f1On ? neededF1Years().filter(y => force || f1YearIsStale(y, now)) : [];
+  if (!teamJobs.length && !tennisDue && !years.length) { render(); return; }
+
   const btn = document.getElementById('refresh');
   btn.disabled = true; btn.textContent = '更新中…';
+  state.loading = true;
+  state.errors = [];
+  const changed = new Set();
+  const finished = (source) => (ok) => { if (ok) changed.add(source); renderSoon(); };
   try {
-    // F1: fetch every season touched by the chosen range and the next two months.
-    const years = neededF1Years();
-    const teamJobs = [...state.tracked.map(t => ['soccer', t]), ...state.nbaTeams.map(t => ['nba', t])];
-    const [teamResults, f, tn] = await Promise.all([
-      Promise.allSettled(teamJobs.map(([sport, t]) => fetchTeamSchedule(sport, t))),
-      fetchF1(years),
-      fetchTennis(state.tennisPlayers, state.rangeStart, state.rangeEnd + DAY_MS),
+    await Promise.all([
+      runLimited(teamJobs.map(([s, t]) => () => updateTeam(s, t)
+        .then(() => finished(s)(true), () => { state.errors.push(t.name); renderSoon(); })), MAX_PARALLEL_TEAMS),
+      tennisDue ? updateTennis().then(finished('tennis')) : null,
+      years.length ? updateF1(years).then(finished('f1')) : null,
     ]);
-    const errors = [...f.failed, ...tn.failed];
-    const fresh = { soccer: [], nba: [] };
-    teamResults.forEach((r, i) => {
-      const [sport, team] = teamJobs[i];
-      if (r.status === 'fulfilled') fresh[sport] = mergeById(fresh[sport], r.value);
-      else {
-        errors.push(team.name);
-        // Keep the old data of a team that failed, so the page stays useful offline.
-        fresh[sport] = mergeById(fresh[sport], state[sport].filter(e => e.home.id === team.id || e.away.id === team.id));
-      }
-    });
-    state.soccer = fresh.soccer;
-    state.nba = fresh.nba;
-    if (!tn.allFailed) {
-      state.tennis = tn.list;
-      state.tennisCovered = { from: state.rangeStart, to: state.rangeEnd + DAY_MS };
+    if (changed.size) {
+      state.fetchedAt = Date.now();
+      saveStore({ fetchedAt: state.fetchedAt });
+      changed.forEach(saveEvents);
     }
-    if (f.list.length) {
-      const keep = state.f1.filter(x => !years.includes(tw(x.start).getUTCFullYear()));
-      state.f1 = [...keep, ...f.list];
-    }
-    years.forEach(y => { if (!f.failed.includes(`F1 ${y} 賽程`)) state.f1Years.add(y); });
-    state.errors = errors;
-    state.fetchedAt = Date.now();
-    saveStore({ soccer: state.soccer, nba: state.nba, tennis: state.tennis, f1: state.f1, fetchedAt: state.fetchedAt });
   } finally {
+    state.loading = false;
     btn.disabled = false; btn.textContent = '↻ 更新';
-    for (const k of Object.keys(stCache)) delete stCache[k];   // standings are re-fetched too
     render();
   }
+  if (refreshAgain) { refreshAgain = false; refresh(); }
 }
 
-// Fetch tennis again when the chosen date range goes outside what was fetched.
-async function ensureTennis() {
-  const c = state.tennisCovered;
-  if (!state.tennisPlayers.length || (c && c.from <= state.rangeStart && c.to >= state.rangeEnd + DAY_MS)) return;
-  const tn = await fetchTennis(state.tennisPlayers, state.rangeStart, state.rangeEnd + DAY_MS);
-  if (!tn.allFailed) {
-    state.tennis = mergeById(state.tennis, tn.list);
-    state.tennisCovered = { from: state.rangeStart, to: state.rangeEnd + DAY_MS };
-    saveStore({ tennis: state.tennis });
-  }
-  state.errors = [...state.errors, ...tn.failed];
-  render();
-}
-
-// Picker list for one sport + group: soccer league teams, NBA conference teams, or tennis rankings.
+// Picker list of one group: soccer league teams, NBA conference teams, or tennis rankings.
 // Team lists come from the standings endpoint because ESPN's /teams endpoint blocks browser requests (no CORS header).
-async function loadPickList(sport, group) {
-  const lists = state.pickLists[sport];
+const standingsTeams = (entries) => (entries || [])
+  .map(x => ({ id: x.team.id, name: x.team.displayName, logo: x.team.logos?.[0]?.href || '' }))
+  .sort((a, b) => a.name.localeCompare(b.name));
+
+async function loadSoccerList(group, lists) {
+  const d = await getJSON(`${ESPN_STANDINGS}/soccer/${group}/standings`);
+  // Leagues split into conferences (e.g. MLS) have several "children" tables.
+  lists[group] = standingsTeams((d.children || []).flatMap(c => c.standings?.entries || []));
+}
+
+async function loadNbaList(group, lists) {
+  const d = await getJSON(`${ESPN_STANDINGS}/basketball/nba/standings`);
+  for (const c of d.children || []) {
+    const key = /east/i.test(c.name) ? 'east' : /west/i.test(c.name) ? 'west' : null;
+    if (key) lists[key] = standingsTeams(c.standings?.entries);
+  }
+  if (!lists[group]) throw new Error('missing conference');
+}
+
+async function loadTennisList(group, lists) {
+  // Current singles ranking (top 150), kept in ranking order.
+  const d = await getJSON(`${ESPN}/tennis/${group}/rankings`);
+  lists[group] = (d.rankings?.[0]?.ranks || []).map(r => ({
+    id: r.athlete.id, name: r.athlete.displayName, rank: r.current,
+    logo: typeof r.athlete.flag === 'string' ? r.athlete.flag : (r.athlete.flag?.href || ''),
+  }));
+}
+
+async function loadPickList(source, group) {
+  const lists = state.pickLists[source];
   if (lists[group]) return;
   try {
-    if (sport === 'soccer') {
-      const d = await getJSON(`${ESPN_STANDINGS}/soccer/${group}/standings`);
-      // Leagues split into conferences (e.g. MLS) have several "children" tables.
-      lists[group] = (d.children || []).flatMap(c => c.standings?.entries || [])
-        .map(x => ({ id: x.team.id, name: x.team.displayName, logo: x.team.logos?.[0]?.href || '' }))
-        .sort((a, b) => a.name.localeCompare(b.name));
-    } else if (sport === 'nba') {
-      const d = await getJSON(`${ESPN_STANDINGS}/basketball/nba/standings`);
-      for (const c of d.children || []) {
-        const key = /east/i.test(c.name) ? 'east' : /west/i.test(c.name) ? 'west' : null;
-        if (!key) continue;
-        lists[key] = (c.standings?.entries || [])
-          .map(x => ({ id: x.team.id, name: x.team.displayName, logo: x.team.logos?.[0]?.href || '' }))
-          .sort((a, b) => a.name.localeCompare(b.name));
-      }
-      if (!lists[group]) throw new Error('missing conference');
-    } else {
-      // Tennis: current singles ranking (top 150), kept in ranking order.
-      const d = await getJSON(`${ESPN}/tennis/${group}/rankings`);
-      lists[group] = (d.rankings?.[0]?.ranks || []).map(r => ({
-        id: r.athlete.id, name: r.athlete.displayName, rank: r.current,
-        logo: typeof r.athlete.flag === 'string' ? r.athlete.flag : (r.athlete.flag?.href || ''),
-      }));
-    }
+    await FOLLOW[source].loadList(group, lists);
   } catch {
     lists[group] = null; // null = failed, allow retry
   }
@@ -1420,7 +1102,7 @@ async function loadPickList(sport, group) {
 // "完成" applies the draft; "取消" (or Esc) throws it away.
 let draft = null;          // { tracked, nbaTeams, tennisPlayers, filters } or null when the pop-up is closed
 let openSnapshot = null;   // settings fingerprint at the moment the pop-up was opened
-const pickSearch = { soccer: '', nba: '', tennis: '' };   // text typed in each search box
+const pickSearch = Object.fromEntries(PICK_TABS.map(t => [t, '']));   // text typed in each search box
 const view = () => draft || state;   // what the pop-up shows
 
 const copySettings = (src) => ({
@@ -1438,34 +1120,23 @@ function settingsSnapshot(src) {
 }
 const isDirty = () => !!draft && settingsSnapshot(draft) !== openSnapshot;
 
-// Apply confirmed settings: drop events of unfollowed teams/players, then fetch newly followed ones.
+// Apply confirmed settings: drop events of unfollowed teams/players, then fetch what is missing.
 async function applySettings(d) {
-  const added = {
-    soccer: d.tracked.filter(t => !follows('tracked', t.id)),
-    nba: d.nbaTeams.filter(t => !follows('nbaTeams', t.id)),
-  };
   const tennisAdded = d.tennisPlayers.some(p => !follows('tennisPlayers', p.id));
   for (const k of FOLLOW_KEYS) state[k] = d[k];
   state.filters = d.filters;
-  const keep = (key) => (e) => follows(key, e.home.id) || follows(key, e.away.id);
-  state.soccer = state.soccer.filter(keep('tracked'));
-  state.nba = state.nba.filter(keep('nbaTeams'));
-  state.tennis = state.tennis.filter(keep('tennisPlayers'));
-  if (tennisAdded) state.tennisCovered = null;
-  saveStore({ tracked: state.tracked, nbaTeams: state.nbaTeams, tennisPlayers: state.tennisPlayers,
-    filters: state.filters, soccer: state.soccer, nba: state.nba, tennis: state.tennis });
+  for (const [source, cfg] of Object.entries(FOLLOW)) {
+    state[source] = state[source].filter(e => follows(cfg.key, e.home.id) || follows(cfg.key, e.away.id));
+  }
+  for (const source of TEAM_SOURCES) {
+    const at = state.fetchAt[source];
+    for (const id of Object.keys(at)) if (!follows(FOLLOW[source].key, id)) { delete at[id]; state.fullIds.delete(id); }
+  }
+  if (tennisAdded) { state.fetchAt.tennis = {}; state.cover.tennis = null; }
+  saveStore(Object.fromEntries([...FOLLOW_KEYS, 'filters'].map(k => [k, state[k]])));
+  Object.keys(FOLLOW).forEach(saveEvents);
   renderFilters(); render();
-
-  const jobs = [...added.soccer.map(t => ['soccer', t]), ...added.nba.map(t => ['nba', t])];
-  const results = await Promise.allSettled(jobs.map(([sport, t]) => fetchTeamSchedule(sport, t)));
-  results.forEach((r, i) => {
-    const [sport, team] = jobs[i];
-    if (r.status === 'fulfilled') state[sport] = mergeById(state[sport], r.value);
-    else state.errors = [...state.errors, team.name];
-  });
-  if (jobs.length) saveStore({ soccer: state.soccer, nba: state.nba });
-  await ensureTennis();
-  render();
+  await refresh();
 }
 
 // =====================================================================
@@ -1477,17 +1148,18 @@ function chip(group, value, label, checked, logo = '', sport = '', rank = null, 
   return `<label class="chip ${checked ? 'on' : ''}"><input type="checkbox" data-group="${group}" data-sport="${sport}" value="${esc(value)}" ${checked ? 'checked' : ''}>${img}${r}${esc(label)}${groupLabel ? `<span class="group">${esc(groupLabel)}</span>` : ''}</label>`;
 }
 
-// Tabs and one panel per sport, built once from SPORT_TABS / FOLLOW.
+// Tabs and one panel per sport, built once from SPORT_TABS.
 function buildSportPanels() {
-  document.getElementById('sportTabs').innerHTML = Object.entries(SPORT_TABS).map(([s, label]) =>
-    `<button class="sport-tab" role="tab" data-sport="${s}"><span class="emoji" aria-hidden="true">${SPORT_EMOJI[label] || ''}</span>${esc(label)}<span class="cnt" id="${s}-cnt"></span></button>`).join('');
+  document.getElementById('sportTabs').innerHTML = Object.entries(SPORT_TABS).map(([s, t]) =>
+    `<button class="sport-tab" role="tab" data-sport="${s}"><span class="emoji" aria-hidden="true">${SPORT_EMOJI[t.label] || ''}</span>${esc(t.label)}</button>`).join('');
   document.getElementById('sportPanels').innerHTML = Object.keys(SPORT_TABS).map(s => {
     if (s === 'f1') {
       return `<section class="fsection sport-panel" data-sport="f1">
         <div class="fgroup"><div class="ftitle">要顯示的賽段</div><div class="chips" id="f1Chips"></div></div>
       </section>`;
     }
-    const f = FOLLOW[s];
+    const f = SPORT_TABS[s];
+    const choose = tabLeagues(s).some(([, l]) => l.divisions) ? `${f.leagueWord}和分區` : f.leagueWord;
     return `<section class="fsection sport-panel" data-sport="${s}">
       <div class="fgroup">
         <details class="picker-box tracked-box" id="${s}-tracked-box">
@@ -1498,11 +1170,12 @@ function buildSportPanels() {
       ${s === 'tennis' ? `<div class="fgroup" id="tennis-extra"></div>` : ''}
       <div class="fgroup">
         <details class="picker-box" id="${s}-picker">
-          <summary class="ftitle">新增／移除${f.what}：先選${f.groupWord}，再勾選${f.what}</summary>
+          <summary class="ftitle">新增／移除${f.what}：先選${choose}，再勾選${f.what}</summary>
           <div class="picker">
             <input type="search" class="pick-search" id="${s}-search" data-search-input="${s}" placeholder="輸入中文或英文名稱" aria-label="搜尋${f.what}" autocomplete="off" hidden>
-            <div class="pick-bar">
-              <select id="${s}-select" data-sport="${s}"></select>
+            <div class="pick-bar" id="${s}-bar">
+              <select id="${s}-league" data-pick-league="${s}" aria-label="選擇${f.leagueWord}"></select>
+              <select id="${s}-division" data-pick-division="${s}" aria-label="選擇分區" hidden></select>
               <button type="button" data-pick-all="${s}">全選</button>
               <button type="button" data-pick-none="${s}">全不選</button>
               <button type="button" class="search-toggle" data-search="${s}" title="搜尋${f.what}" aria-label="搜尋${f.what}" aria-expanded="false">${SEARCH_ICON}</button>
@@ -1515,47 +1188,61 @@ function buildSportPanels() {
   }).join('');
 }
 
-// Every loaded team / player of a sport, across all its leagues, conferences or tours.
-const allPicks = (sport) => Object.keys(FOLLOW[sport].groups)
-  .flatMap(g => (state.pickLists[sport][g] || []).map(t => ({ ...t, group: g })));
+// The league and group currently chosen in a tab's dropdowns.
+const SPORT_TAB_OF = Object.fromEntries(PICK_TABS.flatMap(t => tabSources(t).map(s => [s, t])));   // source -> tab
+const pickedLeague = (tab) => SPORT_TABS[tab].leagues[state.pick[tab].league];
+const pickedGroup = (tab) => pickedLeague(tab).divisions ? state.pick[tab].division : state.pick[tab].league;
+
+// Every loaded team / player of a tab, across all its leagues and divisions.
+const allPicks = (tab) => tabGroups(tab)
+  .flatMap(([source, group]) => (state.pickLists[source][group] || []).map(t => ({ ...t, source, group })));
 // Lower case and without accents, so "atletico" finds "Atlético Madrid".
 const normalize = (text) => text.normalize('NFD').replace(/[\u0300-\u036f·・]/g, '').toLowerCase().trim();
 const matchesSearch = (t, q) => normalize(`${t.name} ${ZH_NAMES[t.name] || ''}`).includes(q);
 const byName = (a, b) => a.name.localeCompare(b.name);
 
-function renderPicker(sport) {
-  const box = document.getElementById(`${sport}-pick`);
-  const cfg = FOLLOW[sport];
-  const key = cfg.key;
-  const q = normalize(pickSearch[sport]);
+function renderPicker(tab) {
+  const box = document.getElementById(`${tab}-pick`);
+  const cfg = SPORT_TABS[tab];
+  const source = pickedLeague(tab).source;
+  const key = FOLLOW[source].key;
+  const q = normalize(pickSearch[tab]);
   const searching = !!q;
-  const items = state.pickLists[sport][state.pickGroup[sport]];
+  const items = state.pickLists[source][pickedGroup(tab)];
   const ready = Array.isArray(items);
-  document.querySelectorAll(`[data-pick-all="${sport}"], [data-pick-none="${sport}"]`).forEach(b => { b.disabled = !ready || searching; });
-  document.getElementById(`${sport}-select`).disabled = searching;
+  document.querySelectorAll(`[data-pick-all="${tab}"], [data-pick-none="${tab}"]`).forEach(b => { b.disabled = !ready || searching; });
+  document.getElementById(`${tab}-league`).disabled = searching;
+  document.getElementById(`${tab}-division`).disabled = searching;
   if (searching) {
-    // Search looks through every league / conference / tour, not only the selected one.
-    const found = allPicks(sport).filter(t => matchesSearch(t, q));
-    found.sort(sport === 'tennis' ? (a, b) => a.rank - b.rank : byName);
-    const missing = Object.keys(cfg.groups).filter(g => !Array.isArray(state.pickLists[sport][g]));
+    // Search looks through every league and division of the tab, not only the selected one.
+    const found = allPicks(tab).filter(t => matchesSearch(t, q));
+    found.sort(cfg.ranked ? (a, b) => a.rank - b.rank : byName);
+    const missing = tabGroups(tab).filter(([s, g]) => !Array.isArray(state.pickLists[s][g]));
     const note = missing.length ? '<span class="hint">部分清單還沒載入完成，結果可能不完整。</span>' : '';
     box.innerHTML = found.length
-      ? found.map(t => chip('pick', t.id, t.name, follows(key, t.id, view()), t.logo, sport, t.rank, cfg.groups[t.group])).join('') + note
+      ? found.map(t => chip('pick', t.id, t.name, follows(FOLLOW[t.source].key, t.id, view()), t.logo, t.source, t.rank, GROUP_NAMES[t.source][t.group])).join('') + note
       : note || `<span class="hint">找不到符合的${cfg.what}。中文名稱不在對照表裡時，請改用英文搜尋。</span>`;
     return;
   }
   if (items === undefined) { box.innerHTML = '<span class="hint">載入清單中…</span>'; return; }
   if (items === null) { box.innerHTML = '<span class="hint">清單載入失敗，請重新選一次。</span>'; return; }
-  box.innerHTML = items.map(t => chip('pick', t.id, t.name, follows(key, t.id, view()), t.logo, sport, t.rank)).join('');
+  box.innerHTML = items.map(t => chip('pick', t.id, t.name, follows(key, t.id, view()), t.logo, source, t.rank)).join('');
+}
+
+// Loads the list the tab's dropdowns point at, if it isn't loaded yet.
+function loadPickedList(tab) {
+  const source = pickedLeague(tab).source, group = pickedGroup(tab);
+  if (state.pickLists[source][group] === null) delete state.pickLists[source][group];
+  return loadPickList(source, group).then(() => renderPicker(tab));
 }
 
 // Opens or closes the search box under the picker heading.
-function setSearchOpen(sport, open) {
-  const input = document.getElementById(`${sport}-search`);
+function setSearchOpen(tab, open) {
+  const input = document.getElementById(`${tab}-search`);
   input.hidden = !open;
-  document.querySelector(`[data-search="${sport}"]`).classList.toggle('on', open);
-  document.querySelector(`[data-search="${sport}"]`).setAttribute('aria-expanded', open);
-  if (!open) { input.value = ''; pickSearch[sport] = ''; }
+  document.querySelector(`[data-search="${tab}"]`).classList.toggle('on', open);
+  document.querySelector(`[data-search="${tab}"]`).setAttribute('aria-expanded', open);
+  if (!open) { input.value = ''; pickSearch[tab] = ''; }
 }
 
 function renderFilters() {
@@ -1566,24 +1253,31 @@ function renderFilters() {
   fb.innerHTML = `${FILTER_ICON}<span class="fb-label">篩選器・追蹤 </span>${followCount()}`;
   fb.setAttribute('aria-label', `篩選器・追蹤 ${followCount()}`);   // screen readers still hear the full name
 
-  for (const [sport, cfg] of Object.entries(FOLLOW)) {
-    const list = sport === 'tennis' ? src[cfg.key] : [...src[cfg.key]].sort(byName);
-    document.getElementById(`${sport}-tracked`).classList.toggle('tracked-empty', !list.length);
-    document.getElementById(`${sport}-tracked`).innerHTML = list.length
-      ? list.map(t => `<span class="chip on">${t.logo ? `<img src="${esc(t.logo)}" alt="" loading="lazy">` : ''}${esc(t.name)}<span class="hint">${esc(cfg.groups[t.group] || '')}</span><button class="x" data-remove="${esc(t.id)}" data-sport="${sport}" title="移除">✕</button></span>`).join('')
+  for (const tab of PICK_TABS) {
+    const cfg = SPORT_TABS[tab];
+    const items = tabSources(tab).flatMap(source => src[FOLLOW[source].key].map(t => ({ ...t, source })));
+    const list = cfg.ranked ? items : items.sort(byName);
+    document.getElementById(`${tab}-tracked`).classList.toggle('tracked-empty', !list.length);
+    document.getElementById(`${tab}-tracked`).innerHTML = list.length
+      ? list.map(t => `<span class="chip on">${t.logo ? `<img src="${esc(t.logo)}" alt="" loading="lazy">` : ''}${esc(t.name)}<span class="hint">${esc(GROUP_NAMES[t.source][t.group] || '')}</span><button class="x" data-remove="${esc(t.id)}" data-sport="${t.source}" title="移除">✕</button></span>`).join('')
       : `<span class="hint">目前沒有追蹤任何${cfg.what}，請從下方選擇。</span>`;
-    document.getElementById(`${sport}-select`).innerHTML = Object.entries(cfg.groups)
-      .map(([k, v]) => `<option value="${k}" ${k === state.pickGroup[sport] ? 'selected' : ''}>${esc(v)}</option>`).join('');
-    document.getElementById(`${sport}-cnt`).textContent = list.length ? `(${list.length})` : '';
-    document.getElementById(`${sport}-tracked-cnt`).textContent = ` ${list.length}`;
-    renderPicker(sport);
+    const pick = state.pick[tab];
+    const options = (entries, chosen) => entries.map(([k, v]) => `<option value="${k}" ${k === chosen ? 'selected' : ''}>${esc(v)}</option>`).join('');
+    document.getElementById(`${tab}-league`).innerHTML = options(tabLeagues(tab).map(([k, l]) => [k, l.name]), pick.league);
+    // The division dropdown only exists for leagues that have divisions.
+    const divisions = pickedLeague(tab).divisions;
+    const divisionSelect = document.getElementById(`${tab}-division`);
+    divisionSelect.hidden = !divisions;
+    divisionSelect.innerHTML = divisions ? options(Object.entries(divisions), pick.division) : '';
+    document.getElementById(`${tab}-bar`).classList.toggle('two-selects', !!divisions);
+    document.getElementById(`${tab}-tracked-cnt`).textContent = ` ${list.length}`;
+    renderPicker(tab);
   }
   document.getElementById('tennis-extra').innerHTML = `<div class="hint">只顯示單打。清單是目前排名前 150 名。
     網球的比賽通常要到前一天才排定時間，之前會顯示「時間未定」。</div>`;
   document.getElementById('f1Chips').innerHTML =
     chip('f1On', '1', '顯示 F1', f.f1On) +
     Object.entries(F1_CATEGORIES).map(([k, v]) => chip('f1Cats', k, v, f.f1Cats.includes(k))).join('');
-  document.getElementById('f1-cnt').textContent = f.f1On ? '' : '(關)';
   for (const k of ['winStart', 'winEnd']) {
     document.getElementById(k).innerHTML = WIN_OPTIONS
       .map(m => `<option value="${m}" ${m === f[k] ? 'selected' : ''}>${minToHM(m)}</option>`).join('');
@@ -1614,9 +1308,7 @@ function visibleItems(from, to) {
   const inRange = (e) => e.start >= from && e.start < to;
   const involves = (key) => (e) => follows(key, e.home.id) || follows(key, e.away.id);
   const items = [
-    ...state.soccer.filter(e => inRange(e) && involves('tracked')(e)),
-    ...state.nba.filter(e => inRange(e) && involves('nbaTeams')(e)),
-    ...state.tennis.filter(e => inRange(e) && involves('tennisPlayers')(e)),
+    ...Object.entries(FOLLOW).flatMap(([source, cfg]) => state[source].filter(e => inRange(e) && involves(cfg.key)(e))),
     ...(f.f1On ? state.f1.filter(s => inRange(s) && f.f1Cats.includes(s.cat)) : []),
   ];
   return items.sort((a, b) => a.start - b.start);
@@ -1671,28 +1363,11 @@ function renderItem(e) {
   const when = e.timeValid
     ? `<div class="when">${fmtTime(e.start)}<small>${fmtWeekday(e.start)}</small></div>`
     : `<div class="when tbd">未定<small>${fmtWeekday(e.start)}</small></div>`;
-  let sport, comp, body, foot = [];
-  if (e.kind === 'soccer') {
-    sport = '足球';
-    // Skip stage names that are just the season name (league matches).
-    comp = [e.compName, e.stage && !/^\d{4}/.test(e.stage) ? (STAGES[e.stage] || e.stage) : ''];
-    body = renderVersus(e);
-    foot.push(e.venue);
-  } else if (e.kind === 'nba') {
-    sport = 'NBA';
-    comp = [NBA_TYPES[e.type]];
-    body = renderVersus(e);
-    foot.push(e.venue);
-  } else if (e.kind === 'tennis') {
-    sport = '網球';
-    comp = [e.tournament, TENNIS_ROUNDS[e.round] || e.round];
-    body = renderVersus(e);
-    foot.push('單打', e.venue);
-  } else {
-    sport = 'F1';
-    comp = [`第 ${e.round} 站`, e.location];
-    body = `<div class="f1-name">${esc(e.raceName)}・${esc(e.session)}</div>`;
-  }
+  const cfg = FOLLOW[e.kind];
+  const sport = cfg ? cfg.label : 'F1';
+  const comp = cfg ? cfg.cardLabels(e).comp : [`第 ${e.round} 站`, e.location];
+  const foot = cfg ? cfg.cardLabels(e).foot : [];
+  const body = cfg ? renderVersus(e) : `<div class="f1-name">${esc(e.raceName)}・${esc(e.session)}</div>`;
   const finished = e.kind !== 'f1' && e.state === 'post' && !/POSTPONED|CANCELED/.test(e.statusName);
   const stats = finished ? `<a class="stats" href="${esc(googleStatsUrl(e))}" target="_blank" rel="noopener">賽事數據<span class="arr">→</span></a>` : '';
   const footText = foot.filter(Boolean).map(esc).join('・');
@@ -1714,7 +1389,10 @@ function render() {
     `開賽時間 ${minToHM(state.filters.winStart)}–${minToHM(state.filters.winEnd)}（台灣時間）`;
 
   const notices = [];
-  if (!followCount()) notices.push('還沒有追蹤任何球隊或選手，請按「篩選器」選擇，也可以在那裡設定開賽時間。');
+  // With F1 off too, the empty list below already says this.
+  if (!followCount() && state.filters.f1On) notices.push('還沒有追蹤任何球隊或選手，請按「篩選器」選擇，也可以在那裡設定開賽時間。');
+  if (state.settingsUnsaved) notices.push('這個瀏覽器無法儲存設定，關閉頁面後追蹤清單可能會不見。請到「篩選器」匯出設定備份。');
+  if (state.eventsUnsaved.size) notices.push('這個瀏覽器的儲存空間不足，有些賽程沒有存下來，下次開啟會重新下載。你的設定不受影響。');
   if (state.errors.length) notices.push(`部分資料載入失敗：${[...new Set(state.errors)].join('、')}。顯示的可能是上次的資料，請稍後再按「更新賽程」。`);
   document.getElementById('notices').innerHTML = notices.map(n => `<div class="notice">${esc(n)}</div>`).join('');
 
@@ -1729,9 +1407,9 @@ function render() {
   // Summary: only sports that are followed (or F1 when it is on).
   const count = (kind) => ok.filter(e => e.kind === kind).length;
   const parts = [];
-  if (state.tracked.length) parts.push(`足球 ${count('soccer')} 場`);
-  if (state.nbaTeams.length) parts.push(`NBA ${count('nba')} 場`);
-  if (state.tennisPlayers.length) parts.push(`網球 ${count('tennis')} 場`);
+  for (const [source, cfg] of Object.entries(FOLLOW)) {
+    if (state[cfg.key].length) parts.push(`${cfg.label} ${count(source)} 場`);
+  }
   if (state.filters.f1On) parts.push(`F1 ${count('f1')} 節`);
   document.getElementById('summary').textContent =
     `這段期間可看：${parts.join('、') || '0 場'}` + (late.length ? `（另有 ${late.length} 場不在開賽時間內，未顯示）` : '');
@@ -1752,7 +1430,7 @@ function render() {
   if (!dayItems.length) {
     const msg = !followCount() && !state.filters.f1On
       ? '還沒有追蹤任何球隊或選手。<br><button class="primary" onclick="document.getElementById(\'openFilters\').click()">開啟篩選器開始選擇</button>'
-      : (state.fetchedAt ? '這天沒有符合條件的比賽' : '載入中…');
+      : (state.fetchedAt && !state.loading ? '這天沒有符合條件的比賽' : '載入中…');
     document.getElementById('list').innerHTML = `<div class="empty">${msg}</div>`;
     return;
   }
@@ -1762,15 +1440,32 @@ function render() {
 // =====================================================================
 // Standings sidebar
 // =====================================================================
-// View choice is remembered; data is cached for this session only (cleared by "更新").
+// View choice is remembered; data is kept for FRESH_STANDINGS_MS, also across visits ("↻ 更新" clears it).
 const stView = { sport: null, soccer: null, nba: 'east', tennis: 'atp', f1: 'drivers', ...(stored.standingsView || {}) };
+const STANDINGS_TABS = { soccer: '足球', nba: '籃球', tennis: '網球', f1: 'F1' };
 const stCache = {};   // key -> rows array, or null when loading failed
+const stSaved = (() => {   // key -> { at, rows }
+  try { return JSON.parse(localStorage.getItem(STANDINGS_KEY)) || {}; } catch { return {}; }
+})();
+for (const [k, v] of Object.entries(stSaved)) {
+  if (Date.now() - v.at < FRESH_STANDINGS_MS) stCache[k] = v.rows;
+  else delete stSaved[k];
+}
+function saveStandings(key, rows) {
+  stSaved[key] = { at: Date.now(), rows };
+  try { localStorage.setItem(STANDINGS_KEY, JSON.stringify(stSaved)); } catch {}
+}
+function clearStandings() {
+  for (const k of Object.keys(stCache)) delete stCache[k];
+  for (const k of Object.keys(stSaved)) delete stSaved[k];
+  try { localStorage.removeItem(STANDINGS_KEY); } catch {}
+}
 
 // Sports shown as tabs: the ones being followed (F1 when it is on). Nothing followed -> all of them.
 function standingsSports() {
-  const list = ['soccer', 'nba', 'tennis', 'f1'].filter(s =>
-    s === 'f1' ? state.filters.f1On : state[FOLLOW[s].key].length);
-  return list.length ? list : ['soccer', 'nba', 'tennis', 'f1'];
+  const all = Object.keys(STANDINGS_TABS);
+  const list = all.filter(s => s === 'f1' ? state.filters.f1On : state[FOLLOW[s].key].length);
+  return list.length ? list : all;
 }
 
 // Key of the table currently chosen for a sport, e.g. "soccer:eng.1", "nba:east".
@@ -1834,7 +1529,7 @@ function renderStandings() {
   if (!sports.includes(stView.sport)) stView.sport = sports[0];
   const sport = stView.sport;
   document.getElementById('stTabs').innerHTML = sports.map(s =>
-    `<button class="st-tab ${s === sport ? 'active' : ''}" role="tab" aria-selected="${s === sport}" data-st-sport="${s}"><span class="emoji" aria-hidden="true">${SPORT_EMOJI[SPORT_TABS[s]]}</span>${esc(SPORT_TABS[s])}</button>`).join('');
+    `<button class="st-tab ${s === sport ? 'active' : ''}" role="tab" aria-selected="${s === sport}" data-st-sport="${s}"><span class="emoji" aria-hidden="true">${SPORT_EMOJI[STANDINGS_TABS[s]]}</span>${esc(STANDINGS_TABS[s])}</button>`).join('');
 
   const key = standingsKey(sport);
   document.getElementById('stSub').innerHTML = sport === 'soccer'
@@ -1849,7 +1544,7 @@ function renderStandings() {
   if (rows === undefined) {
     box.innerHTML = '<div class="st-msg">載入中…</div>'; note.textContent = '';
     stCache[key] = fetchStandings(key)
-      .then(r => { stCache[key] = r; }, () => { stCache[key] = null; })
+      .then(r => { stCache[key] = r; if (r.length) saveStandings(key, r); }, () => { stCache[key] = null; })
       .then(() => { if (standingsKey(stView.sport) === key) renderStandings(); });
     return;
   }
@@ -1887,9 +1582,7 @@ function setRange(start, end) {
   state.selectedDay = today >= start && today <= end ? today : start;
   render();
   document.querySelector('.tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  // Soccer and NBA data already cover the whole current season; F1 and tennis may need more.
-  if (neededF1Years().some(y => !state.f1Years.has(y))) refresh();
-  else ensureTennis();
+  refresh();   // only fetches what the new dates need
 }
 
 // =====================================================================
@@ -1927,7 +1620,7 @@ document.getElementById('tabs').addEventListener('click', (ev) => {
   state.selectedDay = Number(tab.dataset.day);
   render();
 });
-document.getElementById('refresh').onclick = refresh;
+document.getElementById('refresh').onclick = () => refresh(true);
 
 // Filter pop-up.
 buildSportPanels();
@@ -1939,14 +1632,15 @@ document.getElementById('openFilters').onclick = () => {
   // Work on a copy; nothing changes on the page until "完成".
   draft = copySettings(state);
   openSnapshot = settingsSnapshot(draft);
-  // Each picker starts expanded only when nothing is followed in that sport yet.
+  // Each picker starts expanded only when nothing is followed in that tab yet.
   // Followed lists start collapsed on phones; on larger screens they stay open.
-  for (const [sport, cfg] of Object.entries(FOLLOW)) {
-    document.getElementById(`${sport}-picker`).open = !state[cfg.key].length;
-    document.getElementById(`${sport}-tracked-box`).open = !phoneView.matches;
-    setSearchOpen(sport, false);
-    loadPickList(sport, state.pickGroup[sport]).then(() => renderPicker(sport));
+  for (const tab of PICK_TABS) {
+    document.getElementById(`${tab}-picker`).open = !tabSources(tab).some(s => state[FOLLOW[s].key].length);
+    document.getElementById(`${tab}-tracked-box`).open = !phoneView.matches;
+    setSearchOpen(tab, false);
   }
+  // Lists load when their tab is first shown.
+  if (PICK_TABS.includes(state.sportTab)) loadPickedList(state.sportTab);
   settingsMsg('');
   renderFilters();
   dlg.showModal();
@@ -1971,6 +1665,7 @@ document.getElementById('sportTabs').addEventListener('click', (ev) => {
   if (!tab) return;
   state.sportTab = tab.dataset.sport;
   renderFilters();
+  if (PICK_TABS.includes(state.sportTab)) loadPickedList(state.sportTab);
 });
 
 // Settings: export / import as a JSON file, clear. Import and clear also go into the draft.
@@ -2019,41 +1714,44 @@ dlg.addEventListener('click', (ev) => {
   if (ev.target.closest('.tracked-box > summary') && !phoneView.matches) ev.preventDefault();
 });
 phoneView.addEventListener('change', () => {
-  for (const sport of Object.keys(FOLLOW)) document.getElementById(`${sport}-tracked-box`).open = !phoneView.matches;
+  for (const tab of PICK_TABS) document.getElementById(`${tab}-tracked-box`).open = !phoneView.matches;
 });
 
-// Search icon: open the search box above the button row, and load every list so search covers them all.
+// Search icon: open the search box above the button row, and load every list and the Chinese names.
 dlg.addEventListener('click', async (ev) => {
   const b = ev.target.closest('[data-search]');
   if (!b) return;
-  const sport = b.dataset.search;
+  const tab = b.dataset.search;
   const open = !b.classList.contains('on');
-  setSearchOpen(sport, open);
-  renderPicker(sport);
+  setSearchOpen(tab, open);
+  renderPicker(tab);
   if (!open) return;
-  document.getElementById(`${sport}-search`).focus();
-  await Promise.all(Object.keys(FOLLOW[sport].groups).map(g => loadPickList(sport, g).then(() => renderPicker(sport))));
+  document.getElementById(`${tab}-search`).focus();
+  await Promise.all([
+    ...tabGroups(tab).map(([s, g]) => loadPickList(s, g).then(() => renderPicker(tab))),
+    ...tabSources(tab).map(s => loadZhNames(s).then(() => renderPicker(tab))),
+  ]);
 });
 dlg.addEventListener('input', (ev) => {
-  const sport = ev.target.dataset.searchInput;
-  if (!sport) return;
-  pickSearch[sport] = ev.target.value;
-  renderPicker(sport);
+  const tab = ev.target.dataset.searchInput;
+  if (!tab) return;
+  pickSearch[tab] = ev.target.value;
+  renderPicker(tab);
 });
 
-// Picker group (league / conference / tour) changed.
+// League or division dropdown changed.
 dlg.addEventListener('change', async (ev) => {
   const sel = ev.target;
   // Kickoff window selects (draft only, like the other filters)
   if (sel.dataset.win && draft) { draft.filters[sel.dataset.win] = Number(sel.value); renderFilters(); return; }
-  if (sel.tagName !== 'SELECT' || !sel.dataset.sport) return;
-  const sport = sel.dataset.sport;
-  state.pickGroup[sport] = sel.value;
-  saveStore({ pickGroup: state.pickGroup });
-  if (state.pickLists[sport][sel.value] === null) delete state.pickLists[sport][sel.value];
-  renderPicker(sport);
-  await loadPickList(sport, sel.value);
-  renderPicker(sport);
+  const tab = sel.dataset.pickLeague || sel.dataset.pickDivision;
+  if (!tab) return;
+  state.pick[tab] = sel.dataset.pickLeague
+    ? initialPick(tab, sel.value, state.pick[tab].division)   // the new league may have other divisions
+    : { ...state.pick[tab], division: sel.value };
+  saveStore({ pick: state.pick });
+  renderFilters();
+  await loadPickedList(tab);
 });
 
 // Checkbox changes inside the pop-up only touch the draft.
@@ -2062,9 +1760,8 @@ dlg.addEventListener('change', (ev) => {
   const group = input.dataset.group;
   if (!group || !draft) return;
   if (group === 'pick') {
-    const sport = input.dataset.sport;
-    const key = FOLLOW[sport].key;
-    const t = allPicks(sport).find(x => x.id === input.value);
+    const key = FOLLOW[input.dataset.sport].key;
+    const t = allPicks(SPORT_TAB_OF[input.dataset.sport]).find(x => x.id === input.value && x.source === input.dataset.sport);
     if (input.checked && t) draft[key] = [...draft[key], { id: t.id, name: t.name, group: t.group, logo: t.logo }];
     else draft[key] = draft[key].filter(x => x.id !== input.value);
   } else {
@@ -2079,10 +1776,11 @@ dlg.addEventListener('change', (ev) => {
 dlg.addEventListener('click', (ev) => {
   const b = ev.target.closest('[data-pick-all], [data-pick-none]');
   if (!b || !draft) return;
-  const sport = b.dataset.pickAll || b.dataset.pickNone;
-  const key = FOLLOW[sport].key;
-  const group = state.pickGroup[sport];
-  const items = state.pickLists[sport][group] || [];
+  const tab = b.dataset.pickAll || b.dataset.pickNone;
+  const source = pickedLeague(tab).source;
+  const key = FOLLOW[source].key;
+  const group = pickedGroup(tab);
+  const items = state.pickLists[source][group] || [];
   const ids = new Set(items.map(t => t.id));
   if (b.dataset.pickAll) {
     const add = items.filter(t => !follows(key, t.id, draft)).map(t => ({ id: t.id, name: t.name, group, logo: t.logo }));
