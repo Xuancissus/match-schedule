@@ -443,8 +443,6 @@ const COMP_NAMES = {
   'club.friendly': '俱樂部友誼賽', 'fifa.cwc': '世界俱樂部盃',
 };
 
-// Competition types for the soccer filter.
-const COMP_TYPES = { league: '聯賽', cup: '杯賽', friendly: '友誼賽' };
 
 // ESPN cup stage names -> display name (unknown stages are shown in English)
 const STAGES = {
@@ -1128,8 +1126,6 @@ function mergeById(base, events) {
 // State
 // =====================================================================
 const DEFAULT_FILTERS = {
-  types: ['league', 'cup'],
-  nbaTypes: ['regular', 'playoffs'],
   f1On: true,
   f1Cats: Object.keys(F1_CATEGORIES),
   winStart: WINDOW_START_MIN,
@@ -1167,7 +1163,7 @@ const state = {
   filters: { ...DEFAULT_FILTERS, ...(stored.filters || {}) },
 };
 // "showLate" was removed (the kickoff window replaces it); snap old free-form times to 30-minute steps.
-delete state.filters.showLate;
+for (const k of ['showLate', 'types', 'nbaTypes']) delete state.filters[k];   // options that no longer exist
 state.filters.winStart = snapWin(state.filters.winStart);
 state.filters.winEnd = snapWin(state.filters.winEnd);
 const follows = (key, id, src = state) => src[key].some(t => t.id === id);
@@ -1437,7 +1433,6 @@ function settingsSnapshot(src) {
   const f = src.filters;
   return JSON.stringify({
     ...Object.fromEntries(FOLLOW_KEYS.map(k => [k, src[k].map(t => t.id).sort()])),
-    types: [...f.types].sort(), nbaTypes: [...f.nbaTypes].sort(),
     f1On: f.f1On, f1Cats: [...f.f1Cats].sort(), winStart: f.winStart, winEnd: f.winEnd,
   });
 }
@@ -1500,7 +1495,7 @@ function buildSportPanels() {
           <div class="chips list-rows" id="${s}-tracked"></div>
         </details>
       </div>
-      <div class="fgroup" id="${s}-extra"></div>
+      ${s === 'tennis' ? `<div class="fgroup" id="tennis-extra"></div>` : ''}
       <div class="fgroup">
         <details class="picker-box" id="${s}-picker">
           <summary class="ftitle">新增／移除${f.what}：先選${f.groupWord}，再勾選${f.what}</summary>
@@ -1583,12 +1578,6 @@ function renderFilters() {
     document.getElementById(`${sport}-tracked-cnt`).textContent = ` ${list.length}`;
     renderPicker(sport);
   }
-  document.getElementById('soccer-extra').innerHTML = `<div class="ftitle">賽事類型</div>
-    <div class="chips">${Object.entries(COMP_TYPES).map(([k, v]) => chip('types', k, v, f.types.includes(k))).join('')}</div>
-    <div class="hint" style="margin-top:4px">杯賽包含各國盃賽、超級盃，以及歐冠／歐霸／歐協聯等洲際賽事。</div>`;
-  document.getElementById('nba-extra').innerHTML = `<div class="ftitle">賽季階段</div>
-    <div class="chips">${Object.entries(NBA_TYPES).map(([k, v]) => chip('nbaTypes', k, v, f.nbaTypes.includes(k))).join('')}</div>
-    <div class="hint" style="margin-top:4px">季後賽包含附加賽（Play-In）。</div>`;
   document.getElementById('tennis-extra').innerHTML = `<div class="hint">只顯示單打。清單是目前排名前 150 名。
     網球的比賽通常要到前一天才排定時間，之前會顯示「時間未定」。</div>`;
   document.getElementById('f1Chips').innerHTML =
@@ -1625,8 +1614,8 @@ function visibleItems(from, to) {
   const inRange = (e) => e.start >= from && e.start < to;
   const involves = (key) => (e) => follows(key, e.home.id) || follows(key, e.away.id);
   const items = [
-    ...state.soccer.filter(e => inRange(e) && f.types.includes(e.type) && involves('tracked')(e)),
-    ...state.nba.filter(e => inRange(e) && f.nbaTypes.includes(e.type) && involves('nbaTeams')(e)),
+    ...state.soccer.filter(e => inRange(e) && involves('tracked')(e)),
+    ...state.nba.filter(e => inRange(e) && involves('nbaTeams')(e)),
     ...state.tennis.filter(e => inRange(e) && involves('tennisPlayers')(e)),
     ...(f.f1On ? state.f1.filter(s => inRange(s) && f.f1Cats.includes(s.cat)) : []),
   ];
@@ -2007,7 +1996,7 @@ document.getElementById('importFile').addEventListener('change', async (ev) => {
     if (data.app !== 'match-schedule' || !Array.isArray(data.tracked)) throw new Error('bad file');
     for (const k of FOLLOW_KEYS) draft[k] = cleanFollowList(data[k]);
     draft.filters = { ...DEFAULT_FILTERS, ...(data.filters || {}) };
-    delete draft.filters.showLate;
+    for (const k of ['showLate', 'types', 'nbaTypes']) delete draft.filters[k];
     draft.filters.winStart = snapWin(draft.filters.winStart);
     draft.filters.winEnd = snapWin(draft.filters.winEnd);
     settingsMsg(`已讀入 ${followCount(draft)} 個追蹤項目。按「完成」套用，按「取消」放棄。`);
